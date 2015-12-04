@@ -69,11 +69,11 @@ struct hg_context {
     hg_queue_t *completion_queue;                 /* Completion queue */
     hg_thread_mutex_t completion_queue_mutex;     /* Completion queue mutex */
     hg_thread_cond_t completion_queue_cond;       /* Completion queue cond */
-    hg_list_entry_t *pending_list;                /* List of pending handles */
+    hg_list_t *pending_list;                      /* List of pending handles */
     hg_thread_mutex_t pending_list_mutex;         /* Pending list mutex */
-    hg_list_entry_t *processing_list;             /* List of handles being processed */
+    hg_list_t *processing_list;                   /* List of handles being processed */
     hg_thread_mutex_t processing_list_mutex;      /* Processing list mutex */
-    hg_list_entry_t *self_processing_list;        /* List of handles being processed */
+    hg_list_t *self_processing_list;              /* List of handles being processed */
     hg_thread_mutex_t self_processing_list_mutex; /* Processing list mutex */
     hg_thread_cond_t self_processing_list_cond;   /* Processing list cond */
     hg_thread_pool_t *self_processing_pool;       /* Thread pool for self processing */
@@ -603,7 +603,7 @@ hg_pending_list_remove(struct hg_handle *hg_handle)
 
     hg_thread_mutex_lock(&hg_handle->hg_info.context->pending_list_mutex);
 
-    if (!hg_list_remove_data(&hg_handle->hg_info.context->pending_list,
+    if (!hg_list_remove_data(hg_handle->hg_info.context->pending_list,
             hg_handle_equal, (hg_list_value_t) hg_handle)) {
         HG_LOG_ERROR("Could not remove entry");
         ret = HG_INVALID_PARAM;
@@ -638,7 +638,7 @@ hg_pending_list_cancel(hg_context_t *context)
     hg_thread_mutex_lock(&context->pending_list_mutex);
 
     while (hg_list_length(context->pending_list)) {
-        hg_list_entry_t *entry = context->pending_list;
+        hg_list_entry_t *entry = hg_list_first(context->pending_list);
         struct hg_handle *hg_handle = (struct hg_handle *) hg_list_data(entry);
 
         ret = hg_cancel(hg_handle);
@@ -647,7 +647,7 @@ hg_pending_list_cancel(hg_context_t *context)
             break;
         }
 
-        if (!hg_list_remove_entry(&context->pending_list, entry)) {
+        if (HG_UTIL_FAIL == hg_list_remove_entry(context->pending_list, entry)) {
             HG_LOG_ERROR("Could not remove entry");
             ret = HG_INVALID_PARAM;
             break;
@@ -667,7 +667,7 @@ hg_processing_list_add(struct hg_handle *hg_handle)
 
     hg_thread_mutex_lock(&hg_handle->hg_info.context->processing_list_mutex);
 
-    if (!hg_list_append(&hg_handle->hg_info.context->processing_list,
+    if (!hg_list_insert_head(hg_handle->hg_info.context->processing_list,
             (hg_list_value_t) hg_handle)) {
         HG_LOG_ERROR("Could not append entry");
         ret = HG_NOMEM_ERROR;
@@ -686,7 +686,7 @@ hg_processing_list_remove(struct hg_handle *hg_handle)
 
     hg_thread_mutex_lock(&hg_handle->hg_info.context->processing_list_mutex);
 
-    if (!hg_list_remove_data(&hg_handle->hg_info.context->processing_list,
+    if (!hg_list_remove_data(hg_handle->hg_info.context->processing_list,
             hg_handle_equal, (hg_list_value_t) hg_handle)) {
         HG_LOG_ERROR("Could not remove entry");
         ret = HG_INVALID_PARAM;
@@ -741,7 +741,7 @@ hg_self_processing_list_add(struct hg_handle *hg_handle)
 
     hg_thread_mutex_lock(&hg_handle->hg_info.context->self_processing_list_mutex);
 
-    if (!hg_list_append(&hg_handle->hg_info.context->self_processing_list,
+    if (!hg_list_insert_head(hg_handle->hg_info.context->self_processing_list,
             (hg_list_value_t) hg_handle)) {
         HG_LOG_ERROR("Could not append entry");
         ret = HG_NOMEM_ERROR;
@@ -761,7 +761,7 @@ hg_self_processing_list_remove(struct hg_handle *hg_handle)
     hg_thread_mutex_lock(&hg_handle->hg_info.context->self_processing_list_mutex);
 
     /* Remove handle from self processing list at this point */
-    if (!hg_list_remove_data(&hg_handle->hg_info.context->self_processing_list,
+    if (!hg_list_remove_data(hg_handle->hg_info.context->self_processing_list,
             hg_handle_equal, (hg_list_value_t) hg_handle)) {
         HG_LOG_ERROR("Could not remove entry");
         ret = HG_INVALID_PARAM;
@@ -1355,7 +1355,7 @@ hg_listen(hg_class_t *hg_class, hg_context_t *context)
             goto done;
         }
 
-        new_entry = hg_list_append(&context->pending_list,
+        new_entry = hg_list_insert_head(context->pending_list,
                 (hg_list_value_t) hg_handle);
         if (!new_entry) {
             HG_LOG_ERROR("Could not append handle to pending list");
@@ -1774,9 +1774,24 @@ HG_Context_create(hg_class_t *hg_class)
         goto done;
     }
 
-    context->pending_list = NULL;
-    context->processing_list = NULL;
-    context->self_processing_list = NULL;
+    context->pending_list = hg_list_new();
+    if (!context->pending_list) {
+        HG_LOG_ERROR("Could not create pending list");
+        ret = HG_NOMEM_ERROR;
+        goto done;
+    }
+    context->processing_list = hg_list_new();
+    if (!context->processing_list) {
+        HG_LOG_ERROR("Could not create processing list");
+        ret = HG_NOMEM_ERROR;
+        goto done;
+    }
+    context->self_processing_list = hg_list_new();
+    if (!context->self_processing_list) {
+        HG_LOG_ERROR("Could not create self processing list");
+        ret = HG_NOMEM_ERROR;
+        goto done;
+    }
     context->self_processing_pool = NULL;
 
     /* Create bulk context for internal transfer in case of overflow
@@ -1821,6 +1836,8 @@ HG_Context_destroy(hg_context_t *context)
             goto done;
         }
     }
+    hg_list_free(context->pending_list);
+    context->pending_list = NULL;
 
     /* Check that operations have completed */
     ret = hg_processing_list_wait(context);
@@ -1828,6 +1845,8 @@ HG_Context_destroy(hg_context_t *context)
         HG_LOG_ERROR("Could not wait on processing list");
         goto done;
     }
+    hg_list_free(context->processing_list);
+    context->processing_list = NULL;
 
     /* Check that completion queue is empty now */
     hg_thread_mutex_lock(&context->completion_queue_mutex);
@@ -1847,6 +1866,8 @@ HG_Context_destroy(hg_context_t *context)
 
     /* Destroy self processing pool if created */
     hg_thread_pool_destroy(context->self_processing_pool);
+    hg_list_free(context->self_processing_list);
+    context->self_processing_list = NULL;
 
     /* Destroy bulk context */
     ret = HG_Bulk_context_destroy(context->bulk_context);

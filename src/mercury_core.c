@@ -103,6 +103,7 @@ struct hg_handle {
     hg_uint32_t cookie;                 /* Cookie unique to every RPC call */
     hg_return_t ret;                    /* Return code associated to handle */
     hg_bool_t addr_mine;                /* NA Addr created by HG */
+    hg_list_entry_t *entry;             /* Entry in pending / processing lists */
 
     void *in_buf;                       /* Input buffer */
     na_size_t in_buf_size;              /* Input buffer size */
@@ -603,11 +604,12 @@ hg_pending_list_remove(struct hg_handle *hg_handle)
 
     hg_thread_mutex_lock(&hg_handle->hg_info.context->pending_list_mutex);
 
-    if (!hg_list_remove_data(hg_handle->hg_info.context->pending_list,
-            hg_handle_equal, (hg_list_value_t) hg_handle)) {
+    if (hg_list_remove_entry(hg_handle->hg_info.context->pending_list,
+            hg_handle->entry) != HG_UTIL_SUCCESS) {
         HG_LOG_ERROR("Could not remove entry");
         ret = HG_INVALID_PARAM;
     }
+    hg_handle->entry = NULL;
 
     hg_thread_mutex_unlock(&hg_handle->hg_info.context->pending_list_mutex);
 
@@ -647,7 +649,7 @@ hg_pending_list_cancel(hg_context_t *context)
             break;
         }
 
-        if (HG_UTIL_FAIL == hg_list_remove_entry(context->pending_list, entry)) {
+        if (hg_list_remove_entry(context->pending_list, entry) != HG_UTIL_SUCCESS) {
             HG_LOG_ERROR("Could not remove entry");
             ret = HG_INVALID_PARAM;
             break;
@@ -663,14 +665,18 @@ hg_pending_list_cancel(hg_context_t *context)
 static hg_return_t
 hg_processing_list_add(struct hg_handle *hg_handle)
 {
+    hg_list_entry_t *new_entry = NULL;
     hg_return_t ret = HG_SUCCESS;
 
     hg_thread_mutex_lock(&hg_handle->hg_info.context->processing_list_mutex);
 
-    if (!hg_list_insert_head(hg_handle->hg_info.context->processing_list,
-            (hg_list_value_t) hg_handle)) {
+    new_entry = hg_list_insert_head(hg_handle->hg_info.context->processing_list,
+            (hg_list_value_t) hg_handle);
+    if (!new_entry) {
         HG_LOG_ERROR("Could not append entry");
         ret = HG_NOMEM_ERROR;
+    } else {
+        hg_handle->entry = new_entry;
     }
 
     hg_thread_mutex_unlock(&hg_handle->hg_info.context->processing_list_mutex);
@@ -686,11 +692,12 @@ hg_processing_list_remove(struct hg_handle *hg_handle)
 
     hg_thread_mutex_lock(&hg_handle->hg_info.context->processing_list_mutex);
 
-    if (!hg_list_remove_data(hg_handle->hg_info.context->processing_list,
-            hg_handle_equal, (hg_list_value_t) hg_handle)) {
+    if (hg_list_remove_entry(hg_handle->hg_info.context->processing_list,
+            hg_handle->entry) != HG_UTIL_SUCCESS) {
         HG_LOG_ERROR("Could not remove entry");
         ret = HG_INVALID_PARAM;
     }
+    hg_handle->entry = NULL;
 
     hg_thread_mutex_unlock(&hg_handle->hg_info.context->processing_list_mutex);
 
@@ -737,14 +744,18 @@ done:
 static hg_return_t
 hg_self_processing_list_add(struct hg_handle *hg_handle)
 {
+    hg_list_entry_t *new_entry = NULL;
     hg_return_t ret = HG_SUCCESS;
 
     hg_thread_mutex_lock(&hg_handle->hg_info.context->self_processing_list_mutex);
 
-    if (!hg_list_insert_head(hg_handle->hg_info.context->self_processing_list,
-            (hg_list_value_t) hg_handle)) {
+    new_entry = hg_list_insert_head(hg_handle->hg_info.context->self_processing_list,
+            (hg_list_value_t) hg_handle);
+    if (!new_entry) {
         HG_LOG_ERROR("Could not append entry");
         ret = HG_NOMEM_ERROR;
+    } else {
+        hg_handle->entry = new_entry;
     }
 
     hg_thread_mutex_unlock(&hg_handle->hg_info.context->self_processing_list_mutex);
@@ -761,11 +772,12 @@ hg_self_processing_list_remove(struct hg_handle *hg_handle)
     hg_thread_mutex_lock(&hg_handle->hg_info.context->self_processing_list_mutex);
 
     /* Remove handle from self processing list at this point */
-    if (!hg_list_remove_data(hg_handle->hg_info.context->self_processing_list,
-            hg_handle_equal, (hg_list_value_t) hg_handle)) {
+    if (hg_list_remove_entry(hg_handle->hg_info.context->self_processing_list,
+            hg_handle->entry) != HG_UTIL_SUCCESS) {
         HG_LOG_ERROR("Could not remove entry");
         ret = HG_INVALID_PARAM;
     }
+    hg_handle->entry = NULL;
 
     hg_thread_cond_signal(&hg_handle->hg_info.context->self_processing_list_cond);
 
@@ -815,6 +827,7 @@ hg_create(hg_class_t *hg_class, hg_context_t *context)
     hg_handle->tag = 0;
     hg_handle->ret = HG_SUCCESS;
     hg_handle->addr_mine = HG_FALSE;
+    hg_handle->entry = NULL;
 
     /* Initialize processing buffers and use unexpected message size */
     hg_handle->in_buf = NULL;
@@ -1362,6 +1375,7 @@ hg_listen(hg_class_t *hg_class, hg_context_t *context)
             ret = HG_NOMEM_ERROR;
             goto done;
         }
+        hg_handle->entry = new_entry;
 
         /* Post a new unexpected receive */
         na_ret = NA_Msg_recv_unexpected(hg_class->na_class, hg_class->na_context,

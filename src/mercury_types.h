@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2013-2015 Argonne National Laboratory, Department of Energy,
- *                         UChicago Argonne, LLC and The HDF Group.
+ * Copyright (C) 2013-2016 Argonne National Laboratory, Department of Energy,
+ *                    UChicago Argonne, LLC and The HDF Group.
  * All rights reserved.
  *
  * The full copyright notice, including terms governing use, modification,
@@ -63,7 +63,7 @@ typedef enum {
 } hg_proc_hash_t;
 
 /* Error return codes:
- * Functions return 0 for success or -HG_XXX_ERROR for failure */
+ * Functions return 0 for success or HG_XXX_ERROR for failure */
 typedef enum hg_return {
     HG_SUCCESS = 0,     /*!< operation succeeded */
     HG_NA_ERROR,        /*!< error in NA layer */
@@ -74,6 +74,8 @@ typedef enum hg_return {
     HG_PROTOCOL_ERROR,  /*!< protocol does not match */
     HG_NO_MATCH,        /*!< no function match */
     HG_CHECKSUM_ERROR,   /*!< checksum error */
+    HG_CHECKSUM_ERROR,  /*!< checksum error */
+    HG_OTHER_ERROR,      /*!< error from mercury_util or external to mercury */
     HG_CANCELLED        /*!< operation was cancelled */
 } hg_return_t;
 

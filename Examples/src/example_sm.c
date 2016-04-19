@@ -1,4 +1,4 @@
-#include <unistd.h>             /* ftruncate */
+#include <unistd.h>             /* ftruncate, getpid */
 #include <fcntl.h>              /* O_ flags */
 #include <stdio.h>
 #include <sys/uio.h>
@@ -6,7 +6,7 @@
 #include <sys/mman.h>
 
 
-#define SHM_FILE "/tmp/mercury.shm"
+#define SHM_FILE "/mercury.shm"
 
 int main(void)
 {
@@ -38,10 +38,12 @@ int main(void)
     char *result = mmap(NULL, (size_t) size, PROT_WRITE | PROT_READ, mmap_flags,
                         descriptor, 0);
     perror("mmap");
-    munmap(result, size);
-    shm_unlink(SHM_FILE);
-    
-#ifdef CROSS_MEMORY_ATTACH
+    pid = getpid();
+    int i=0;
+    for(i; i < 50; ++i){
+        strncpy(result, "01234567899876543210", 20);
+    }
+    remote[0].iov_base = result;
     nread = process_vm_readv(pid, local, 2, remote, 1, 0);
     if (nread != 20){
         printf("nread != 20\n");
@@ -49,7 +51,12 @@ int main(void)
     }
     else {
         printf("nread == 20\n");
+        printf("%s\n", buf1);
+        printf("%s\n", buf2);
         return 0;
     }
-#endif 
+
+    munmap(result, size);
+    shm_unlink(SHM_FILE);
+
 }

@@ -196,6 +196,7 @@ configure_file(
 #------------------------------------------------------------------------------
 set(NA_SRCS
   ${CMAKE_CURRENT_SOURCE_DIR}/na.c
+  ${CMAKE_CURRENT_SOURCE_DIR}/na_sm.c  
 )
 
 if(NA_USE_BMI)

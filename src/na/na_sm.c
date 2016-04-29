@@ -18,6 +18,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 /****************/
 /* Local Macros */
@@ -38,6 +39,7 @@
 /* Local Type and Struct Definition */
 /************************************/
 typedef struct na_sm_op_id na_sm_op_id_t;
+typedef struct na_sm_addr na_sm_addr_t;
 
 /* na_sm_addr */
 struct na_sm_addr {
@@ -493,7 +495,37 @@ static na_return_t
 na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
         na_cb_t callback, void *arg, const char *name, na_op_id_t *op_id)
 {
+    struct na_sm_op_id *na_sm_op_id = NULL;
     na_return_t ret = NA_SUCCESS;
+    na_sm_addr_t *na_sm_addr = NULL;
+    
+    /* Allocate op_id */
+    na_sm_op_id = (na_sm_op_id_t *) calloc(1, sizeof(*na_sm_op_id));
+    if (!na_sm_op_id) {
+        NA_LOG_ERROR("Could not allocate NA SM operation ID");
+        return NA_NOMEM_ERROR;
+    }
+    na_sm_op_id->context = context;
+    na_sm_op_id->type = NA_CB_RECV_UNEXPECTED;
+    na_sm_op_id->callback = callback;
+    na_sm_op_id->arg = arg;
+    
+    /* Allocte addr */
+    na_sm_addr = (na_sm_addr_t *)malloc(sizeof(*na_sm_addr));
+    if (!na_sm_op_id) {
+        NA_LOG_ERROR("Could not allocate NA SM address");
+        free(na_sm_op_id);
+        return NA_NOMEM_ERROR;
+    }
+    na_sm_addr->sm_path = NULL;
+    na_sm_addr->sm_path = (char *)malloc(sizeof(char)*PATH_MAX);
+    if (!na_sm_addr->sm_path) {
+        NA_LOG_ERROR("Could not allocate NA SM path");
+        free(na_sm_op_id);
+        free(na_sm_addr);
+        return NA_NOMEM_ERROR;
+    }
+    na_sm_addr->unexpected = NA_FALSE;
     return ret;
 }
 

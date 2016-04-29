@@ -87,6 +87,7 @@ na_info_print(struct na_info *na_info);
 /*******************/
 /* Local Variables */
 /*******************/
+extern na_class_t na_sm_class_g;
 #ifdef NA_HAS_BMI
 extern na_class_t na_bmi_class_g;
 #endif
@@ -101,6 +102,7 @@ extern na_class_t na_cci_class_g;
 #endif
 
 static const na_class_t *na_class_table[] = {
+    &na_sm_class_g,
 #ifdef NA_HAS_BMI
     &na_bmi_class_g,
 #endif

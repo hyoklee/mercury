@@ -24,12 +24,11 @@
 /****************/
 
 /* Msg sizes */
-/* TODO define that */
-#define NA_SM_UNEXPECTED_SIZE xxx
-#define NA_SM_EXPECTED_SIZE   xxx
+#define NA_SM_UNEXPECTED_SIZE 4096
+#define NA_SM_EXPECTED_SIZE  NA_SM_UNEXPECTED_SIZE 
 
 /* Max tag */
-#define NA_SM_MAX_TAG xxx
+#define NA_SM_MAX_TAG (NA_TAG_UB >> 2)
 
 
 #define NA_SM_PRIVATE_DATA(na_class) \
@@ -38,16 +37,16 @@
 /************************************/
 /* Local Type and Struct Definition */
 /************************************/
+typedef struct na_sm_op_id na_sm_op_id_t;
 
 /* na_sm_addr */
 struct na_sm_addr {
-    /* TODO Something here */
+    char* sm_path;         /* Path to shared memory */
     na_bool_t  unexpected; /* Address generated from unexpected recv */
     na_bool_t  self;       /* Boolean for self */
 };
 
 struct na_sm_mem_handle {
-    /* TODO Something here */
     na_ptr_t base;     /* Initial address of memory */
     na_size_t size;    /* Size of memory */
     na_uint8_t attr;   /* Flag of operation access */
@@ -63,15 +62,16 @@ struct na_sm_info_lookup {
 };
 
 struct na_sm_info_send_unexpected {
+    na_sm_op_id_t *op_id; /* SM operation id */
 
 };
 
 struct na_sm_info_recv_unexpected {
-
+    void *buf;
 };
 
 struct na_sm_info_send_expected {
-
+    na_sm_op_id_t *op_id; /* SM operation id */
 };
 
 struct na_sm_info_recv_expected {
@@ -432,7 +432,14 @@ const na_class_t na_sm_class_g = {
 static na_bool_t
 na_sm_check_protocol(const char *protocol_name)
 {
-
+    na_bool_t accept = NA_FALSE;
+    if (!strncmp("sm", protocol_name, 2)){
+        accept = NA_TRUE;
+    }
+    else {
+        printf("%s\n", protocol_name);
+    }
+    return accept;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -440,21 +447,26 @@ static na_return_t
 na_sm_initialize(na_class_t * na_class, const struct na_info *na_info,
         na_bool_t listen)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    fprintf(stderr, "comes here\n");
+    return ret;
+    
 }
 
 /*---------------------------------------------------------------------------*/
 static na_return_t
 na_sm_init(na_class_t *na_class)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
 static na_return_t
 na_sm_finalize(na_class_t *na_class)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -462,7 +474,8 @@ static na_return_t
 na_sm_context_create(na_class_t NA_UNUSED *na_class,
         na_plugin_context_t *context)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -471,6 +484,8 @@ na_sm_context_destroy(na_class_t NA_UNUSED *na_class,
         na_plugin_context_t context)
 {
 
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -478,7 +493,8 @@ static na_return_t
 na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
         na_cb_t callback, void *arg, const char *name, na_op_id_t *op_id)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -486,6 +502,8 @@ static na_return_t
 na_sm_addr_self(na_class_t NA_UNUSED *na_class, na_addr_t *addr)
 {
 
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -493,6 +511,8 @@ static na_return_t
 na_sm_addr_free(na_class_t NA_UNUSED *na_class, na_addr_t addr)
 {
 
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -500,6 +520,8 @@ static na_bool_t
 na_sm_addr_is_self(na_class_t NA_UNUSED *na_class, na_addr_t addr)
 {
 
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -507,7 +529,8 @@ static na_return_t
 na_sm_addr_to_string(na_class_t *na_class, char *buf,
         na_size_t *buf_size, na_addr_t addr)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -515,13 +538,17 @@ static na_size_t
 na_sm_msg_get_max_expected_size(na_class_t NA_UNUSED *na_class)
 {
 
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
 static na_size_t
 na_sm_msg_get_max_unexpected_size(na_class_t NA_UNUSED *na_class)
 {
-
+    na_size_t max_unexpected_size = NA_SM_UNEXPECTED_SIZE;
+    
+    return max_unexpected_size;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -529,6 +556,8 @@ static na_tag_t
 na_sm_msg_get_max_tag(na_class_t NA_UNUSED *na_class)
 {
 
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -537,7 +566,8 @@ na_sm_msg_send_unexpected(na_class_t NA_UNUSED *na_class,
         na_context_t *context, na_cb_t callback, void *arg, const void *buf,
         na_size_t buf_size, na_addr_t dest, na_tag_t tag, na_op_id_t *op_id)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -546,7 +576,22 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
         na_cb_t callback, void *arg, void *buf, na_size_t buf_size,
         na_op_id_t *op_id)
 {
-
+    na_sm_op_id_t *na_sm_op_id = NULL;
+    na_return_t ret = NA_SUCCESS;
+    /* Allocate na_op_id */
+    na_sm_op_id = (na_sm_op_id_t *)calloc(1, sizeof(*na_sm_op_id));
+    if(!na_sm_op_id){
+        NA_LOG_ERROR("Could not allocate NA SM operation ID");
+        return NA_NOMEM_ERROR;
+    }
+    na_sm_op_id->context = context;
+    na_sm_op_id->type = NA_CB_RECV_UNEXPECTED;
+    na_sm_op_id->callback = callback;
+    na_sm_op_id->arg = arg;
+    na_sm_op_id->info.recv_unexpected.buf = buf;
+    
+    *op_id = (na_op_id_t) na_sm_op_id;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -555,7 +600,8 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         na_cb_t callback, void *arg, const void *buf, na_size_t buf_size,
         na_addr_t dest, na_tag_t tag, na_op_id_t *op_id)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -564,7 +610,8 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         na_cb_t callback, void *arg, void *buf, na_size_t buf_size,
         na_addr_t source, na_tag_t tag, na_op_id_t *op_id)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -573,6 +620,8 @@ na_sm_mem_handle_create(na_class_t NA_UNUSED *na_class, void *buf,
         na_size_t buf_size, unsigned long flags, na_mem_handle_t *mem_handle)
 {
 
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -580,7 +629,8 @@ static na_return_t
 na_sm_mem_handle_free(na_class_t NA_UNUSED *na_class,
         na_mem_handle_t mem_handle)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -666,6 +716,8 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         na_size_t length, na_addr_t remote_addr, na_op_id_t *op_id)
 {
 
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -675,7 +727,8 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         na_mem_handle_t remote_mem_handle, na_offset_t remote_offset,
         na_size_t length, na_addr_t remote_addr, na_op_id_t *op_id)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -683,7 +736,8 @@ static na_return_t
 na_sm_progress(na_class_t *na_class, na_context_t *context,
         unsigned int timeout)
 {
-
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -691,6 +745,8 @@ static na_return_t
 na_sm_complete(struct na_sm_op_id *na_sm_op_id)
 {
 
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -698,6 +754,7 @@ static void
 na_sm_release(struct na_cb_info *callback_info, void *arg)
 {
 
+ 
 }
 
 /*---------------------------------------------------------------------------*/
@@ -705,4 +762,6 @@ static na_return_t
 na_sm_cancel(na_class_t *na_class, na_context_t *context, na_op_id_t op_id)
 {
 
+    na_return_t ret = NA_SUCCESS;
+    return ret;
 }

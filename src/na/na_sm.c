@@ -19,6 +19,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <fcntl.h>              /* O_ flags */
+#include <unistd.h>             /* ftruncate, getpid */
+#include <sys/uio.h>
+#include <sys/types.h>
+#include <sys/mman.h>
 
 /****************/
 /* Local Macros */
@@ -30,7 +35,7 @@
 
 /* Max tag */
 #define NA_SM_MAX_TAG (NA_TAG_UB >> 2)
-
+#define SHM_FILE "/mercury.shm"
 
 #define NA_SM_PRIVATE_DATA(na_class) \
     ((struct na_sm_private_data *)(na_class->private_data))
@@ -43,6 +48,8 @@ typedef struct na_sm_addr na_sm_addr_t;
 
 /* na_sm_addr */
 struct na_sm_addr {
+    pid_t pid;             /* remote process id */
+    struct iovec remote[1];     /* remote address  */
     char* sm_path;         /* Path to shared memory */
     na_bool_t  unexpected; /* Address generated from unexpected recv */
     na_bool_t  self;       /* Boolean for self */
@@ -477,6 +484,7 @@ na_sm_context_create(na_class_t NA_UNUSED *na_class,
         na_plugin_context_t *context)
 {
     na_return_t ret = NA_SUCCESS;
+    /* path to shared memory */
     return ret;
 }
 
@@ -519,6 +527,8 @@ na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
     }
     na_sm_addr->sm_path = NULL;
     na_sm_addr->sm_path = (char *)malloc(sizeof(char)*PATH_MAX);
+    strncpy(na_sm_addr->sm_path, SHM_FILE, 12);
+    
     if (!na_sm_addr->sm_path) {
         NA_LOG_ERROR("Could not allocate NA SM path");
         free(na_sm_op_id);
@@ -526,6 +536,8 @@ na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
         return NA_NOMEM_ERROR;
     }
     na_sm_addr->unexpected = NA_FALSE;
+    na_sm_addr->pid = getpid();
+    
     return ret;
 }
 
@@ -542,8 +554,14 @@ na_sm_addr_self(na_class_t NA_UNUSED *na_class, na_addr_t *addr)
 static na_return_t
 na_sm_addr_free(na_class_t NA_UNUSED *na_class, na_addr_t addr)
 {
-
+    na_sm_addr_t *na_sm_addr = (na_sm_addr_t *)addr;
     na_return_t ret = NA_SUCCESS;
+    
+    if (!na_sm_addr) {
+        NA_LOG_ERROR("NULL SM addr");
+        return  NA_INVALID_PARAM;
+    }
+    
     return ret;
 }
 
@@ -769,6 +787,38 @@ na_sm_progress(na_class_t *na_class, na_context_t *context,
         unsigned int timeout)
 {
     na_return_t ret = NA_SUCCESS;
+    /* Convert timeout in ms into seconds. */    
+    double remaining = timeout / 1000.0;
+			
+    fprintf(stderr, "na_sm_progress()\n");
+    do {
+        hg_time_t	t1, t2;
+        int descriptor = -1;
+        int size = 1024 * 1024 * 256; // 256 mb
+    
+        hg_time_get_current(&t1);
+
+        /* Try to make progress here from the SM unexpected queue */
+        descriptor = shm_open(SHM_FILE, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+        if (descriptor != -1) {
+            ftruncate(descriptor, size);
+        }
+        else {
+            NA_LOG_ERROR("shm_open");
+        }
+        
+        if (ret != NA_SUCCESS) {
+            if (ret != NA_TIMEOUT) {
+                NA_LOG_ERROR("Could not make unexpected progress");
+                return ret;
+            }
+        } else
+            break; /* Progressed */
+        
+        hg_time_get_current(&t2);
+        remaining -= hg_time_to_double(hg_time_subtract(t2, t1));
+        
+    } while (remaining > 0);
     return ret;
 }
 
@@ -777,7 +827,22 @@ static na_return_t
 na_sm_complete(struct na_sm_op_id *na_sm_op_id)
 {
 
+    struct na_cb_info *callback_info = NULL;    
     na_return_t ret = NA_SUCCESS;
+    
+    /* Mark op id as completed */
+    na_sm_op_id->completed = NA_TRUE;
+    
+    /* Allocate callback info */
+    callback_info = (struct na_cb_info *)malloc(sizeof(struct na_cb_info));
+    if (!callback_info) {
+        NA_LOG_ERROR("Could not allocate callback info");
+        return NA_NOMEM_ERROR;
+    }
+    callback_info->arg = na_sm_op_id->arg;
+    callback_info->ret = ret;
+    callback_info->type = na_sm_op_id->type;
+    
     return ret;
 }
 

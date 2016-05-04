@@ -457,7 +457,25 @@ na_sm_initialize(na_class_t * na_class, const struct na_info *na_info,
         na_bool_t listen)
 {
     na_return_t ret = NA_SUCCESS;
-    fprintf(stderr, "comes here\n");
+
+    int descriptor = -1;
+    int size = 1024 * 1024 * 256; // 256 mb
+    fprintf(stderr, ">na_sm_initialize()\n");    
+
+    descriptor = shm_open(SHM_FILE, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+    if (descriptor != -1) {
+        ftruncate(descriptor, size);
+    }
+    else {
+        NA_LOG_ERROR("shm_open() failed.");
+    }
+    
+    int mmap_flags = MAP_SHARED;        
+    char *result = mmap(NULL, (size_t) size, PROT_WRITE | PROT_READ, mmap_flags,
+                        descriptor, 0);
+    
+    ret = na_sm_init(na_class);
+    
     return ret;
     
 }
@@ -467,6 +485,24 @@ static na_return_t
 na_sm_init(na_class_t *na_class)
 {
     na_return_t ret = NA_SUCCESS;
+    hg_queue_t *unexpected_msg_queue = NULL;
+
+    na_class->private_data = malloc(sizeof(struct na_sm_private_data));
+    if (!na_class->private_data) {
+        NA_LOG_ERROR("Could not allocate NA private data class");
+        return NA_NOMEM_ERROR;
+    }
+    
+    unexpected_msg_queue = hg_queue_new();
+    if (!unexpected_msg_queue) {
+        NA_LOG_ERROR("Could not create unexpected message queue");
+        free(na_class->private_data);        
+        return NA_NOMEM_ERROR;
+    }
+    NA_SM_PRIVATE_DATA(na_class)->unexpected_msg_queue = unexpected_msg_queue;
+    hg_thread_mutex_init(
+            &NA_SM_PRIVATE_DATA(na_class)->unexpected_msg_queue_mutex);
+    
     return ret;
 }
 
@@ -475,6 +511,8 @@ static na_return_t
 na_sm_finalize(na_class_t *na_class)
 {
     na_return_t ret = NA_SUCCESS;
+    // munmap(result, size);
+    shm_unlink(SHM_FILE);
     return ret;
 }
 
@@ -765,8 +803,24 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         na_mem_handle_t remote_mem_handle, na_offset_t remote_offset,
         na_size_t length, na_addr_t remote_addr, na_op_id_t *op_id)
 {
-
+    struct iovec remote[1];
+    struct iovec wlocal[1];
+    ssize_t nread=0, nwrite=0;
     na_return_t ret = NA_SUCCESS;
+    struct na_sm_op_id *na_sm_op_id = NULL;
+    /* to-do: get pid from na_class / na_conext / local_mem_handle ? */
+    pid_t pid = getpid();
+    wlocal[0].iov_base = local_offset;
+    wlocal[0].iov_len = length;
+    remote[0].iov_base = remote_offset; /* mmap pointer */
+    remote[0].iov_len = length;
+#ifdef LINUX    
+    nwrite = process_vm_writev(pid, wlocal, 1, remote, 1, 0);
+#endif    
+    fprintf(stderr, "nwrite=%d\n", nwrite);
+    
+    /* Assign op_id */
+    *op_id = (na_op_id_t) na_sm_op_id;
     return ret;
 }
 
@@ -778,35 +832,37 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         na_size_t length, na_addr_t remote_addr, na_op_id_t *op_id)
 {
     na_return_t ret = NA_SUCCESS;
+    struct na_sm_op_id *na_sm_op_id = NULL;
+    
+    /* Assign op_id */
+    *op_id = (na_op_id_t) na_sm_op_id;
     return ret;
 }
 
 /*---------------------------------------------------------------------------*/
 static na_return_t
 na_sm_progress(na_class_t *na_class, na_context_t *context,
-        unsigned int timeout)
+               unsigned int timeout)
 {
+    struct na_sm_op_id *na_sm_op_id = NULL;
+    
     na_return_t ret = NA_SUCCESS;
     /* Convert timeout in ms into seconds. */    
     double remaining = timeout / 1000.0;
 			
-    fprintf(stderr, "na_sm_progress()\n");
+    // fprintf(stderr, "na_sm_progress()\n");
     do {
         hg_time_t	t1, t2;
-        int descriptor = -1;
-        int size = 1024 * 1024 * 256; // 256 mb
-    
+        hg_queue_value_t queue_value;
         hg_time_get_current(&t1);
+        queue_value = hg_queue_pop_tail(
+                                        NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue);
 
         /* Try to make progress here from the SM unexpected queue */
-        descriptor = shm_open(SHM_FILE, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
-        if (descriptor != -1) {
-            ftruncate(descriptor, size);
-        }
-        else {
-            NA_LOG_ERROR("shm_open");
-        }
+        na_sm_op_id = (queue_value != HG_QUEUE_NULL) ?
+            (struct na_sm_op_id *) queue_value : NULL;
         
+
         if (ret != NA_SUCCESS) {
             if (ret != NA_TIMEOUT) {
                 NA_LOG_ERROR("Could not make unexpected progress");
@@ -818,7 +874,7 @@ na_sm_progress(na_class_t *na_class, na_context_t *context,
         hg_time_get_current(&t2);
         remaining -= hg_time_to_double(hg_time_subtract(t2, t1));
         
-    } while (remaining > 0);
+    } while (remaining > 0 && ret != NA_SUCCESS);
     return ret;
 }
 
@@ -829,7 +885,12 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
 
     struct na_cb_info *callback_info = NULL;    
     na_return_t ret = NA_SUCCESS;
-    
+
+    if (na_sm_op_id == NULL){
+        NA_LOG_ERROR("na_sm_op_id is NULL.");        
+	return NA_INVALID_PARAM;
+    }
+        
     /* Mark op id as completed */
     na_sm_op_id->completed = NA_TRUE;
     
@@ -842,6 +903,16 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
     callback_info->arg = na_sm_op_id->arg;
     callback_info->ret = ret;
     callback_info->type = na_sm_op_id->type;
+    switch (na_sm_op_id->type) {
+	case NA_CB_LOOKUP:
+            break;
+	default:
+		NA_LOG_ERROR("Operation not supported");
+		ret = NA_INVALID_PARAM;
+		break;
+    }
+    ret = na_cb_completion_add(na_sm_op_id->context, na_sm_op_id->callback,
+            callback_info, &na_sm_release, na_sm_op_id);
     
     return ret;
 }
@@ -859,6 +930,6 @@ static na_return_t
 na_sm_cancel(na_class_t *na_class, na_context_t *context, na_op_id_t op_id)
 {
 
-    na_return_t ret = NA_SUCCESS;
+    na_return_t ret = NA_CANCELED;
     return ret;
 }

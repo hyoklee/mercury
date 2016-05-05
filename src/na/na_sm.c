@@ -804,18 +804,18 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         na_size_t length, na_addr_t remote_addr, na_op_id_t *op_id)
 {
     struct iovec remote[1];
-    struct iovec wlocal[1];
-    ssize_t nread=0, nwrite=0;
+    struct iovec local[1];
+    ssize_t nwrite=0;
     na_return_t ret = NA_SUCCESS;
     struct na_sm_op_id *na_sm_op_id = NULL;
     /* to-do: get pid from na_class / na_conext / local_mem_handle ? */
     pid_t pid = getpid();
-    wlocal[0].iov_base = local_offset;
-    wlocal[0].iov_len = length;
+    local[0].iov_base = local_offset;
+    local[0].iov_len = length;
     remote[0].iov_base = remote_offset; /* mmap pointer */
     remote[0].iov_len = length;
 #ifdef LINUX    
-    nwrite = process_vm_writev(pid, wlocal, 1, remote, 1, 0);
+    nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
 #endif    
     fprintf(stderr, "nwrite=%d\n", nwrite);
     
@@ -831,8 +831,22 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         na_mem_handle_t remote_mem_handle, na_offset_t remote_offset,
         na_size_t length, na_addr_t remote_addr, na_op_id_t *op_id)
 {
+    struct iovec remote[1];
+    struct iovec local[1];
+    ssize_t nread=0;
     na_return_t ret = NA_SUCCESS;
     struct na_sm_op_id *na_sm_op_id = NULL;
+
+    /* to-do: get pid from na_class / na_conext / local_mem_handle ? */
+    pid_t pid = getpid();
+    local[0].iov_base = local_offset;
+    local[0].iov_len = length;
+    remote[0].iov_base = remote_offset; /* mmap pointer */
+    remote[0].iov_len = length;
+#ifdef LINUX    
+    nread = process_vm_readv(pid, local, 1, remote, 1, 0);
+#endif    
+    fprintf(stderr, "nread=%d\n", nread);
     
     /* Assign op_id */
     *op_id = (na_op_id_t) na_sm_op_id;
@@ -904,15 +918,15 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
     callback_info->ret = ret;
     callback_info->type = na_sm_op_id->type;
     switch (na_sm_op_id->type) {
-	case NA_CB_LOOKUP:
+    case NA_CB_LOOKUP:
             break;
-	default:
-		NA_LOG_ERROR("Operation not supported");
-		ret = NA_INVALID_PARAM;
-		break;
+    default:
+        NA_LOG_ERROR("Operation not supported");
+        ret = NA_INVALID_PARAM;
+        break;
     }
     ret = na_cb_completion_add(na_sm_op_id->context, na_sm_op_id->callback,
-            callback_info, &na_sm_release, na_sm_op_id);
+                               callback_info, &na_sm_release, na_sm_op_id);
     
     return ret;
 }

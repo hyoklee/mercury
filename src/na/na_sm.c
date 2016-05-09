@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2013-2016 Argonne National Laboratory, Department of Energy,
- *                    UChicago Argonne, LLC and The HDF Group.
+ *                         UChicago Argonne, LLC and The HDF Group.
  * All rights reserved.
  *
  * The full copyright notice, including terms governing use, modification,
@@ -454,7 +454,7 @@ na_sm_check_protocol(const char *protocol_name)
 /*---------------------------------------------------------------------------*/
 static na_return_t
 na_sm_initialize(na_class_t * na_class, const struct na_info *na_info,
-        na_bool_t listen)
+                 na_bool_t listen)
 {
     na_return_t ret = NA_SUCCESS;
 
@@ -583,8 +583,19 @@ na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
 static na_return_t
 na_sm_addr_self(na_class_t NA_UNUSED *na_class, na_addr_t *addr)
 {
-
+    struct na_sm_addr *na_sm_addr = NULL;
     na_return_t ret = NA_SUCCESS;
+
+    na_sm_addr = (struct na_sm_addr *) malloc(sizeof(struct na_sm_addr));
+    if (!na_sm_addr) {
+        NA_LOG_ERROR("Could not allocate SM addr");
+        return NA_NOMEM_ERROR;
+    }
+    na_sm_addr->pid = 0;
+    na_sm_addr->sm_path = NULL;
+    na_sm_addr->unexpected = NA_FALSE;
+    na_sm_addr->self = NA_TRUE;
+    *addr = (na_addr_t) na_sm_addr;    
     return ret;
 }
 
@@ -599,7 +610,9 @@ na_sm_addr_free(na_class_t NA_UNUSED *na_class, na_addr_t addr)
         NA_LOG_ERROR("NULL SM addr");
         return  NA_INVALID_PARAM;
     }
-    
+    free(na_sm_addr->sm_path);
+    free(na_sm_addr);
+    na_sm_addr = NULL;
     return ret;
 }
 
@@ -608,8 +621,8 @@ static na_bool_t
 na_sm_addr_is_self(na_class_t NA_UNUSED *na_class, na_addr_t addr)
 {
 
-    na_return_t ret = NA_SUCCESS;
-    return ret;
+    struct na_sm_addr *na_sm_addr = (struct na_sm_addr *) addr;
+    return na_sm_addr->self;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -617,7 +630,20 @@ static na_return_t
 na_sm_addr_to_string(na_class_t *na_class, char *buf,
         na_size_t *buf_size, na_addr_t addr)
 {
+    na_sm_addr_t *na_sm_addr = (na_sm_addr_t *)addr;    
     na_return_t ret = NA_SUCCESS;
+    na_size_t string_len;
+    
+    string_len = strlen(na_sm_addr->sm_path);
+    if (buf) {
+        if (string_len >= *buf_size) {
+            NA_LOG_ERROR("Buffer size too small to copy addr");
+            ret = NA_SIZE_ERROR;
+        } else {
+            strncpy(buf, na_sm_addr->sm_path, string_len);
+        }
+    }
+    *buf_size = string_len + 1;
     return ret;
 }
 

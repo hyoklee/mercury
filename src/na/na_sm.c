@@ -84,7 +84,9 @@ struct na_sm_info_send_expected {
 };
 
 struct na_sm_info_recv_expected {
-
+    na_sm_op_id_t *op_id; /* SM operation id */
+    size_t buf_size;
+    size_t actual_size;    
 };
 
 struct na_sm_info_put {
@@ -475,7 +477,7 @@ na_sm_initialize(na_class_t * na_class, const struct na_info *na_info,
                         descriptor, 0);
     
     ret = na_sm_init(na_class);
-    
+    // na_sm_put(na_class, NULL, NULL, NULL, NULL, 100, NULL, 200, 100, NULL, NULL) ;
     return ret;
     
 }
@@ -552,9 +554,10 @@ na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
         return NA_NOMEM_ERROR;
     }
     na_sm_op_id->context = context;
-    na_sm_op_id->type = NA_CB_RECV_UNEXPECTED;
+    na_sm_op_id->type = NA_CB_LOOKUP;
     na_sm_op_id->callback = callback;
     na_sm_op_id->arg = arg;
+    na_sm_op_id->canceled = 0;
     
     /* Allocte addr */
     na_sm_addr = (na_sm_addr_t *)malloc(sizeof(*na_sm_addr));
@@ -575,6 +578,16 @@ na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
     }
     na_sm_addr->unexpected = NA_FALSE;
     na_sm_addr->pid = getpid();
+    na_sm_addr->self = NA_FALSE;
+    na_sm_op_id->info.lookup.addr = (na_addr_t) na_sm_addr;
+    ret = na_sm_complete(na_sm_op_id);
+    if (ret != NA_SUCCESS) {
+        NA_LOG_ERROR("Could not complete operation");
+        free(na_sm_addr);
+        free(na_sm_op_id);
+        return ret;
+    }
+    *op_id = (na_op_id_t) na_sm_op_id;
     
     return ret;
 }
@@ -714,7 +727,38 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         na_cb_t callback, void *arg, const void *buf, na_size_t buf_size,
         na_addr_t dest, na_tag_t tag, na_op_id_t *op_id)
 {
+    struct na_sm_op_id *na_sm_op_id = NULL;    
     na_return_t ret = NA_SUCCESS;
+    /* Allocate op_id */
+    na_sm_op_id = (na_sm_op_id_t *) calloc(1, sizeof(*na_sm_op_id));
+    if (!na_sm_op_id) {
+        NA_LOG_ERROR("Could not allocate NA SM operation ID");
+        return NA_NOMEM_ERROR;
+    }
+    na_sm_op_id->context = context;
+    na_sm_op_id->type = NA_CB_SEND_EXPECTED;
+    na_sm_op_id->callback = callback;
+    na_sm_op_id->arg = arg;
+    na_sm_op_id->completed = NA_FALSE;
+    na_sm_op_id->info.send_expected.op_id = 0;
+    na_sm_op_id->canceled = NA_FALSE;
+
+    /* Post the SM send request */
+    fprintf(stderr, "I will post send request here.\n");
+    int sm_ret = 1;
+
+    /* If immediate completion, directly add to completion queue */
+    if (sm_ret > 0) {
+        ret = na_sm_complete(na_sm_op_id);
+        if (ret != NA_SUCCESS) {
+            NA_LOG_ERROR("Could not complete operation");
+            free(na_sm_op_id);
+            return ret;
+        }
+    }
+
+    /* Assign op_id */
+    *op_id = (na_op_id_t) na_sm_op_id;
     return ret;
 }
 
@@ -724,7 +768,43 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         na_cb_t callback, void *arg, void *buf, na_size_t buf_size,
         na_addr_t source, na_tag_t tag, na_op_id_t *op_id)
 {
+    struct na_sm_op_id *na_sm_op_id = NULL;        
     na_return_t ret = NA_SUCCESS;
+    int sm_ret = 0;
+
+    /* Allocate na_op_id */
+    na_sm_op_id = (struct na_sm_op_id *) malloc(sizeof(struct na_sm_op_id));    
+    if (!na_sm_op_id) {
+        NA_LOG_ERROR("Could not allocate NA SM operation ID");
+        return NA_NOMEM_ERROR;
+    }
+    na_sm_op_id->context = context;
+    na_sm_op_id->type = NA_CB_RECV_EXPECTED;
+    na_sm_op_id->callback = callback;
+    na_sm_op_id->arg = arg;
+    na_sm_op_id->completed = NA_FALSE;
+    na_sm_op_id->info.recv_expected.op_id = 0;
+    na_sm_op_id->info.recv_expected.buf_size = buf_size;
+    na_sm_op_id->info.recv_expected.actual_size = 0;
+    na_sm_op_id->canceled = NA_FALSE;
+
+    /* Post the SM recv request. */
+    fprintf(stderr, "I will post recv request here.\n");
+    sm_ret = 1;
+
+    /* If immediate completion, directly add to completion queue */
+    if (sm_ret > 0) {
+        ret = na_sm_complete(na_sm_op_id);
+        if (ret != NA_SUCCESS) {
+            NA_LOG_ERROR("Could not complete operation");
+            free(na_sm_op_id);
+            return ret;
+        }
+    }
+
+    /* Assign op_id */
+    *op_id = (na_op_id_t) na_sm_op_id;
+
     return ret;
 }
 
@@ -895,14 +975,30 @@ na_sm_progress(na_class_t *na_class, na_context_t *context,
         hg_time_t	t1, t2;
         hg_queue_value_t queue_value;
         hg_time_get_current(&t1);
-        queue_value = hg_queue_pop_tail(
-                                        NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue);
+        queue_value =
+            hg_queue_pop_tail(
+                              NA_SM_PRIVATE_DATA(na_class)
+                              ->unexpected_op_queue);
 
         /* Try to make progress here from the SM unexpected queue */
         na_sm_op_id = (queue_value != HG_QUEUE_NULL) ?
             (struct na_sm_op_id *) queue_value : NULL;
-        
 
+        if (na_sm_op_id) {
+            switch (na_sm_op_id->type) {
+            case NA_CB_LOOKUP:
+                NA_LOG_ERROR("Should not complete lookup here");
+                break;
+            default:
+                NA_LOG_ERROR("Unknown type of operation ID");
+                ret = NA_PROTOCOL_ERROR;
+            
+            }
+        }
+        else {
+            
+        }
+        
         if (ret != NA_SUCCESS) {
             if (ret != NA_TIMEOUT) {
                 NA_LOG_ERROR("Could not make unexpected progress");
@@ -945,7 +1041,11 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
     callback_info->type = na_sm_op_id->type;
     switch (na_sm_op_id->type) {
     case NA_CB_LOOKUP:
-            break;
+        callback_info->info.lookup.addr = na_sm_op_id->info.lookup.addr;
+        // NA_LOG_ERROR("Got NA_CB_LOOKUP.");
+        break;
+    case NA_CB_GET:
+        break;
     default:
         NA_LOG_ERROR("Operation not supported");
         ret = NA_INVALID_PARAM;
@@ -953,6 +1053,10 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
     }
     ret = na_cb_completion_add(na_sm_op_id->context, na_sm_op_id->callback,
                                callback_info, &na_sm_release, na_sm_op_id);
+    if (ret != NA_SUCCESS) {
+        NA_LOG_ERROR("Could not add callback to completion queue");
+        free(callback_info);
+    }
     
     return ret;
 }

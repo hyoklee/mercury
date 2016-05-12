@@ -45,6 +45,7 @@
 /************************************/
 typedef struct na_sm_op_id na_sm_op_id_t;
 typedef struct na_sm_addr na_sm_addr_t;
+typedef struct na_sm_mem_handle na_sm_mem_handle_t;
 
 /* na_sm_addr */
 struct na_sm_addr {
@@ -305,6 +306,12 @@ na_sm_mem_register(
         );
 
 static na_return_t
+na_sm_mem_publish(
+        na_class_t      *na_class,
+        na_mem_handle_t  mem_handle
+        );
+
+static na_return_t
 na_sm_mem_deregister(
         na_class_t      *na_class,
         na_mem_handle_t  mem_handle
@@ -424,7 +431,7 @@ const na_class_t na_sm_class_g = {
         na_sm_mem_handle_free,               /* mem_handle_free */
         na_sm_mem_register,                  /* mem_register */
         na_sm_mem_deregister,                /* mem_deregister */
-        NULL,                                /* mem_publish */
+        na_sm_mem_publish,                   /* mem_publish */
         NULL,                                /* mem_unpublish */
         na_sm_mem_handle_get_serialize_size, /* mem_handle_get_serialize_size */
         na_sm_mem_handle_serialize,          /* mem_handle_serialize */
@@ -476,8 +483,14 @@ na_sm_initialize(na_class_t * na_class, const struct na_info *na_info,
     char *result = mmap(NULL, (size_t) size, PROT_WRITE | PROT_READ, mmap_flags,
                         descriptor, 0);
     
+    if (result == MAP_FAILED) {
+        NA_LOG_ERROR("mmap failed().");        
+        return NA_PROTOCOL_ERROR;
+    }
+    
     ret = na_sm_init(na_class);
     // na_sm_put(na_class, NULL, NULL, NULL, NULL, 100, NULL, 200, 100, NULL, NULL) ;
+    // na_sm_get(na_class, ...)
     return ret;
     
 }
@@ -693,7 +706,38 @@ na_sm_msg_send_unexpected(na_class_t NA_UNUSED *na_class,
         na_context_t *context, na_cb_t callback, void *arg, const void *buf,
         na_size_t buf_size, na_addr_t dest, na_tag_t tag, na_op_id_t *op_id)
 {
+    struct na_sm_op_id *na_sm_op_id = NULL;    
     na_return_t ret = NA_SUCCESS;
+    /* Allocate op_id */
+    na_sm_op_id = (na_sm_op_id_t *) calloc(1, sizeof(*na_sm_op_id));
+    if (!na_sm_op_id) {
+        NA_LOG_ERROR("Could not allocate NA SM operation ID");
+        return NA_NOMEM_ERROR;
+    }
+    na_sm_op_id->context = context;
+    na_sm_op_id->type = NA_CB_SEND_UNEXPECTED;
+    na_sm_op_id->callback = callback;
+    na_sm_op_id->arg = arg;
+    na_sm_op_id->completed = NA_FALSE;
+    na_sm_op_id->info.send_unexpected.op_id = 0;
+    na_sm_op_id->canceled = NA_FALSE;
+
+    /* Post the SM send request */
+    fprintf(stderr, "I will post unexpected send request here.\n");
+    int sm_ret = 1;
+
+    /* If immediate completion, directly add to completion queue */
+    if (sm_ret > 0) {
+        ret = na_sm_complete(na_sm_op_id);
+        if (ret != NA_SUCCESS) {
+            NA_LOG_ERROR("Could not complete operation");
+            free(na_sm_op_id);
+            return ret;
+        }
+    }
+
+    /* Assign op_id */
+    *op_id = (na_op_id_t) na_sm_op_id;
     return ret;
 }
 
@@ -744,7 +788,7 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     na_sm_op_id->canceled = NA_FALSE;
 
     /* Post the SM send request */
-    fprintf(stderr, "I will post send request here.\n");
+    fprintf(stderr, "I will post expected send request here.\n");
     int sm_ret = 1;
 
     /* If immediate completion, directly add to completion queue */
@@ -789,7 +833,7 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     na_sm_op_id->canceled = NA_FALSE;
 
     /* Post the SM recv request. */
-    fprintf(stderr, "I will post recv request here.\n");
+    fprintf(stderr, "I will post expected recv request here.\n");
     sm_ret = 1;
 
     /* If immediate completion, directly add to completion queue */
@@ -815,6 +859,22 @@ na_sm_mem_handle_create(na_class_t NA_UNUSED *na_class, void *buf,
 {
 
     na_return_t ret = NA_SUCCESS;
+    na_ptr_t sm_buf_base = (na_ptr_t) buf;
+    struct na_sm_mem_handle *na_sm_mem_handle = NULL;
+    size_t sm_buf_size = buf_size;
+
+    /* Allocate memory handle (use calloc to avoid uninitialized transfer) */
+    na_sm_mem_handle = (struct na_sm_mem_handle*)
+            calloc(1, sizeof(struct na_sm_mem_handle));
+    if (!na_sm_mem_handle) {
+          NA_LOG_ERROR("Could not allocate NA SM memory handle");
+          return NA_NOMEM_ERROR;
+    }
+    na_sm_mem_handle->base = sm_buf_base;
+    na_sm_mem_handle->size = sm_buf_size;
+    na_sm_mem_handle->attr = flags;
+    *mem_handle = (na_mem_handle_t) na_sm_mem_handle;
+    
     return ret;
 }
 
@@ -829,16 +889,47 @@ na_sm_mem_handle_free(na_class_t NA_UNUSED *na_class,
 
 /*---------------------------------------------------------------------------*/
 static na_return_t
-na_sm_mem_register(na_class_t NA_UNUSED *na_class, na_mem_handle_t NA_UNUSED mem_handle)
+na_sm_mem_register(na_class_t *na_class, na_mem_handle_t mem_handle)
+{
+    int descriptor = -1;    
+    na_sm_mem_handle_t *na_sm_mem_handle = mem_handle;
+    descriptor = shm_open("/mercury_bulk.shm", O_CREAT | O_RDWR,
+                          S_IRUSR | S_IWUSR);
+    if (descriptor != -1) {
+        ftruncate(descriptor, na_sm_mem_handle->size);
+    }
+    int mmap_flags = MAP_SHARED;
+    char *result = mmap(NULL, (size_t) na_sm_mem_handle->size,
+                        PROT_WRITE | PROT_READ, mmap_flags,
+                        descriptor, 0);
+    if (result == MAP_FAILED) {
+        NA_LOG_ERROR("mmap failed().");
+        return NA_PROTOCOL_ERROR;
+    }
+    na_sm_mem_handle->base = result;
+    return NA_SUCCESS;
+}
+
+/*---------------------------------------------------------------------------*/
+static na_return_t
+na_sm_mem_publish(na_class_t NA_UNUSED *na_class, na_mem_handle_t NA_UNUSED mem_handle)
 {
     return NA_SUCCESS;
 }
 
 /*---------------------------------------------------------------------------*/
 static na_return_t
-na_sm_mem_deregister(na_class_t NA_UNUSED *na_class, na_mem_handle_t NA_UNUSED mem_handle)
+na_sm_mem_deregister(na_class_t NA_UNUSED *na_class, na_mem_handle_t mem_handle)
 {
-    return NA_SUCCESS;
+    na_sm_mem_handle_t *na_sm_mem_handle = mem_handle;
+    int ret = munmap(na_sm_mem_handle->base, na_sm_mem_handle->size);
+    if (ret == 0) {
+        return NA_SUCCESS;
+    }
+    else {
+        NA_LOG_ERROR("munmap failed().");
+        return NA_PROTOCOL_ERROR;        
+    }
 }
 
 /*---------------------------------------------------------------------------*/
@@ -854,9 +945,10 @@ static na_return_t
 na_sm_mem_handle_serialize(na_class_t NA_UNUSED *na_class, void *buf,
         na_size_t buf_size, na_mem_handle_t mem_handle)
 {
+    na_return_t ret = NA_SUCCESS;    
     struct na_sm_mem_handle *na_sm_mem_handle =
             (struct na_sm_mem_handle*) mem_handle;
-    na_return_t ret = NA_SUCCESS;
+
 
     if (buf_size < sizeof(struct na_sm_mem_handle)) {
         NA_LOG_ERROR("Buffer size too small for serializing parameter");
@@ -867,6 +959,7 @@ na_sm_mem_handle_serialize(na_class_t NA_UNUSED *na_class, void *buf,
     /* Copy struct */
     memcpy(buf, na_sm_mem_handle, sizeof(struct na_sm_mem_handle));
 
+    
 done:
     return ret;
 }
@@ -910,14 +1003,17 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         na_size_t length, na_addr_t remote_addr, na_op_id_t *op_id)
 {
     struct iovec remote[1];
-    struct iovec local[1];
+    // struct iovec local[1];
     ssize_t nwrite=0;
     na_return_t ret = NA_SUCCESS;
     struct na_sm_op_id *na_sm_op_id = NULL;
+
     /* to-do: get pid from na_class / na_conext / local_mem_handle ? */
     pid_t pid = getpid();
-    local[0].iov_base = local_offset;
-    local[0].iov_len = length;
+ #if 0
+    local[0].iov_base = local_offset; /* utilize local_mem_handle */
+    local[0].iov_len = length;        /* size of memory from mem_handle */
+#endif     
     remote[0].iov_base = remote_offset; /* mmap pointer */
     remote[0].iov_len = length;
 #ifdef LINUX    
@@ -1044,7 +1140,26 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
         callback_info->info.lookup.addr = na_sm_op_id->info.lookup.addr;
         // NA_LOG_ERROR("Got NA_CB_LOOKUP.");
         break;
+    case NA_CB_RECV_EXPECTED:
+        NA_LOG_ERROR("Got NA_CB_RECV_EXPECTED.");
+        break;
+    case NA_CB_SEND_EXPECTED:
+        NA_LOG_ERROR("Got NA_CB_SEND_EXPECTED.");
+        break;        
+    case NA_CB_SEND_UNEXPECTED:
+        NA_LOG_ERROR("Got NA_CB_SEND_UNEXPECTED.");
+        break;
+    case NA_CB_PUT:
+        NA_LOG_ERROR("Got NA_CB_PUT.");
+        /* Transfer is now done so free RMA info */
+        // free(na_sm_op_id->info.put.rma_info);
+        // na_sm_op_id->info.put.rma_info = NULL;
+        break;
     case NA_CB_GET:
+        NA_LOG_ERROR("Got NA_CB_GET.");        
+        /* Transfer is now done so free RMA info */
+        // free(na_sm_op_id->info.get.rma_info);
+        // na_sm_op_id->info.get.rma_info = NULL;
         break;
     default:
         NA_LOG_ERROR("Operation not supported");

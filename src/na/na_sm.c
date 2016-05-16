@@ -23,7 +23,9 @@
 #include <unistd.h>             /* ftruncate, getpid */
 #include <sys/uio.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/mman.h>
+#include <errno.h>
 
 /****************/
 /* Local Macros */
@@ -49,6 +51,7 @@ typedef struct na_sm_mem_handle na_sm_mem_handle_t;
 
 /* na_sm_addr */
 struct na_sm_addr {
+    na_sm_op_id_t	*na_sm_op_id;	/* For addr_lookup() */    
     pid_t pid;             /* remote process id */
     struct iovec remote[1];     /* remote address  */
     char* sm_path;         /* Path to shared memory */
@@ -501,7 +504,8 @@ na_sm_init(na_class_t *na_class)
 {
     na_return_t ret = NA_SUCCESS;
     hg_queue_t *unexpected_msg_queue = NULL;
-
+    hg_queue_t *unexpected_op_queue = NULL;
+    
     na_class->private_data = malloc(sizeof(struct na_sm_private_data));
     if (!na_class->private_data) {
         NA_LOG_ERROR("Could not allocate NA private data class");
@@ -515,9 +519,23 @@ na_sm_init(na_class_t *na_class)
         return NA_NOMEM_ERROR;
     }
     NA_SM_PRIVATE_DATA(na_class)->unexpected_msg_queue = unexpected_msg_queue;
+
+    /* Create queue for making progress on operation IDs */
+    unexpected_op_queue = hg_queue_new();
+    if (!unexpected_op_queue) {
+        NA_LOG_ERROR("Could not create unexpected op queue");
+        free(na_class->private_data);
+        hg_queue_free(unexpected_msg_queue);
+        return NA_NOMEM_ERROR;
+    }
+    
+    NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue = unexpected_op_queue;
+    
+    
     hg_thread_mutex_init(
             &NA_SM_PRIVATE_DATA(na_class)->unexpected_msg_queue_mutex);
-    
+    hg_thread_mutex_init(
+            &NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
     return ret;
 }
 
@@ -760,6 +778,18 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
     na_sm_op_id->callback = callback;
     na_sm_op_id->arg = arg;
     na_sm_op_id->info.recv_unexpected.buf = buf;
+    /* Push it into queue. */
+    hg_thread_mutex_lock(&NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
+
+    if (hg_queue_push_head(NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue,
+            (hg_queue_value_t) na_sm_op_id) != HG_UTIL_SUCCESS) {
+        NA_LOG_ERROR("Could not push ID to unexpected op queue");
+        ret = NA_NOMEM_ERROR;
+    }
+
+    hg_thread_mutex_unlock(
+            &NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
+
     
     *op_id = (na_op_id_t) na_sm_op_id;
     return ret;
@@ -912,8 +942,29 @@ na_sm_mem_register(na_class_t *na_class, na_mem_handle_t mem_handle)
 
 /*---------------------------------------------------------------------------*/
 static na_return_t
-na_sm_mem_publish(na_class_t NA_UNUSED *na_class, na_mem_handle_t NA_UNUSED mem_handle)
+na_sm_mem_publish(na_class_t *na_class, na_mem_handle_t mem_handle)
 {
+    na_sm_mem_handle_t *na_sm_mem_handle = mem_handle;    
+    fprintf(stderr, ">na_sm_mem_publish():%zd\n", na_sm_mem_handle->base);
+    /* Create named pipe. */
+    char *myfifo = "/tmp/mercury_fifo";
+    char one = 1;
+    int ret = mkfifo(myfifo, 0622);
+    if (ret == -1){
+        fprintf(stderr, "mkfifo failed\n");
+        fprintf(stderr, "Error no is : %d\n", errno);
+        fprintf(stderr, "Error description is : %s\n",strerror(errno));     
+    }
+    int client_to_server = open(myfifo, O_WRONLY);
+    if (client_to_server == -1) {
+        fprintf(stderr, "open failed\n");
+        fprintf(stderr, "Error no is : %d\n", errno);
+        fprintf(stderr, "Error description is : %s\n",strerror(errno));     
+    }
+    write(client_to_server, &one, sizeof(one));
+    perror("Write:"); //Very crude error check
+    close(client_to_server);
+    unlink(myfifo);
     return NA_SUCCESS;
 }
 
@@ -922,6 +973,15 @@ static na_return_t
 na_sm_mem_deregister(na_class_t NA_UNUSED *na_class, na_mem_handle_t mem_handle)
 {
     na_sm_mem_handle_t *na_sm_mem_handle = mem_handle;
+    char* myfifo = "/tmp/mercury_fifo";
+    char buf[1024];
+
+    /* open, read, and display the message from the FIFO */
+    int fd = open(myfifo, O_RDONLY);
+    read(fd, buf, 1024);
+    printf("Received: %s\n", buf);
+    close(fd);
+    
     int ret = munmap(na_sm_mem_handle->base, na_sm_mem_handle->size);
     if (ret == 0) {
         return NA_SUCCESS;
@@ -1003,21 +1063,23 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         na_size_t length, na_addr_t remote_addr, na_op_id_t *op_id)
 {
     struct iovec remote[1];
-    // struct iovec local[1];
+    struct iovec local[1];
     ssize_t nwrite=0;
     na_return_t ret = NA_SUCCESS;
     struct na_sm_op_id *na_sm_op_id = NULL;
-
+    na_sm_mem_handle_t *na_sm_mem_handle_local = local_mem_handle;
+    na_sm_mem_handle_t *na_sm_mem_handle_remote = remote_mem_handle;
+    
     /* to-do: get pid from na_class / na_conext / local_mem_handle ? */
     pid_t pid = getpid();
- #if 0
-    local[0].iov_base = local_offset; /* utilize local_mem_handle */
-    local[0].iov_len = length;        /* size of memory from mem_handle */
-#endif     
-    remote[0].iov_base = remote_offset; /* mmap pointer */
-    remote[0].iov_len = length;
+
+    local[0].iov_base = na_sm_mem_handle_local->base; 
+    local[0].iov_len = na_sm_mem_handle_local->size;
+
+    remote[0].iov_base = na_sm_mem_handle_remote->base;
+    remote[0].iov_len = na_sm_mem_handle_remote->size;
 #ifdef LINUX    
-    nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
+    nwrite = process_vm_writev(pid, local, length, remote, length, 0);
 #endif    
     fprintf(stderr, "nwrite=%d\n", nwrite);
     
@@ -1038,13 +1100,17 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     ssize_t nread=0;
     na_return_t ret = NA_SUCCESS;
     struct na_sm_op_id *na_sm_op_id = NULL;
+    na_sm_mem_handle_t *na_sm_mem_handle_local = local_mem_handle;
+    na_sm_mem_handle_t *na_sm_mem_handle_remote = remote_mem_handle;
 
     /* to-do: get pid from na_class / na_conext / local_mem_handle ? */
     pid_t pid = getpid();
-    local[0].iov_base = local_offset;
-    local[0].iov_len = length;
-    remote[0].iov_base = remote_offset; /* mmap pointer */
-    remote[0].iov_len = length;
+    
+    local[0].iov_base = na_sm_mem_handle_local->base; 
+    local[0].iov_len = na_sm_mem_handle_local->size;
+    
+    remote[0].iov_base = na_sm_mem_handle_remote->base; 
+    remote[0].iov_len = na_sm_mem_handle_remote->size;
 #ifdef LINUX    
     nread = process_vm_readv(pid, local, 1, remote, 1, 0);
 #endif    
@@ -1084,6 +1150,9 @@ na_sm_progress(na_class_t *na_class, na_context_t *context,
             switch (na_sm_op_id->type) {
             case NA_CB_LOOKUP:
                 NA_LOG_ERROR("Should not complete lookup here");
+                break;
+            case NA_CB_RECV_UNEXPECTED:
+                ret = na_sm_complete(na_sm_op_id);
                 break;
             default:
                 NA_LOG_ERROR("Unknown type of operation ID");
@@ -1145,6 +1214,9 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
         break;
     case NA_CB_SEND_EXPECTED:
         NA_LOG_ERROR("Got NA_CB_SEND_EXPECTED.");
+        break;
+    case NA_CB_RECV_UNEXPECTED:
+        NA_LOG_ERROR("Got NA_CB_RECV_UNEXPECTED.");
         break;        
     case NA_CB_SEND_UNEXPECTED:
         NA_LOG_ERROR("Got NA_CB_SEND_UNEXPECTED.");

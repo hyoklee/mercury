@@ -164,12 +164,20 @@ test_bulk(struct na_test_params *params)
         return EXIT_FAILURE;
     }
 
+    
     na_ret = NA_Mem_register(params->network_class, params->local_mem_handle);
     if (na_ret != NA_SUCCESS) {
         fprintf(stderr, "Could not create bulk handle\n");
         return EXIT_FAILURE;
     }
 
+    /* Publish memory. */
+    na_ret = NA_Mem_publish(params->network_class, params->local_mem_handle);
+    if (na_ret != NA_SUCCESS) {
+        fprintf(stderr, "Could not publish bulk memory handle\n");
+        return EXIT_FAILURE;
+    }
+    
     /* Serialize mem handle */
     printf("Serializing bulk memory handle...\n");
     na_ret = NA_Mem_handle_serialize(params->network_class, params->send_buf,

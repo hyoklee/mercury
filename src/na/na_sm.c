@@ -19,8 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
-#include <fcntl.h>              /* O_ flags */
-#include <unistd.h>             /* ftruncate, getpid */
+#include <fcntl.h>
+#include <unistd.h>
 #include <sys/uio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -62,6 +62,7 @@ struct na_sm_addr {
 struct na_sm_mem_handle {
     na_ptr_t base;     /* Initial address of memory */
     na_size_t size;    /* Size of memory */
+    pid_t pid;         /* remote process id */
     na_uint8_t attr;   /* Flag of operation access */
 };
 
@@ -948,23 +949,21 @@ na_sm_mem_publish(na_class_t *na_class, na_mem_handle_t mem_handle)
     fprintf(stderr, ">na_sm_mem_publish():%zd\n", na_sm_mem_handle->base);
     /* Create named pipe. */
     char *myfifo = "/tmp/mercury_fifo";
-    char one = 1;
-    int ret = mkfifo(myfifo, 0622);
-    if (ret == -1){
-        fprintf(stderr, "mkfifo failed\n");
-        fprintf(stderr, "Error no is : %d\n", errno);
-        fprintf(stderr, "Error description is : %s\n",strerror(errno));     
-    }
+    char str[BUFSIZ];
     int client_to_server = open(myfifo, O_WRONLY);
+    pid_t pid = getpid();
     if (client_to_server == -1) {
         fprintf(stderr, "open failed\n");
         fprintf(stderr, "Error no is : %d\n", errno);
         fprintf(stderr, "Error description is : %s\n",strerror(errno));     
     }
-    write(client_to_server, &one, sizeof(one));
-    perror("Write:"); //Very crude error check
-    close(client_to_server);
-    unlink(myfifo);
+    sprintf(str, "%d,%zd,%d", pid, na_sm_mem_handle->base,
+            na_sm_mem_handle->size);
+    write(client_to_server, str, sizeof(str));    
+    sprintf(str, "exit");
+    write(client_to_server, str, sizeof(str));
+
+    close(client_to_server);    
     return NA_SUCCESS;
 }
 
@@ -974,13 +973,6 @@ na_sm_mem_deregister(na_class_t NA_UNUSED *na_class, na_mem_handle_t mem_handle)
 {
     na_sm_mem_handle_t *na_sm_mem_handle = mem_handle;
     char* myfifo = "/tmp/mercury_fifo";
-    char buf[1024];
-
-    /* open, read, and display the message from the FIFO */
-    int fd = open(myfifo, O_RDONLY);
-    read(fd, buf, 1024);
-    printf("Received: %s\n", buf);
-    close(fd);
     
     int ret = munmap(na_sm_mem_handle->base, na_sm_mem_handle->size);
     if (ret == 0) {
@@ -1029,6 +1021,12 @@ static na_return_t
 na_sm_mem_handle_deserialize(na_class_t NA_UNUSED *na_class,
         na_mem_handle_t *mem_handle, const void *buf, na_size_t buf_size)
 {
+    int client_to_server;
+    int fret;
+    char *myfifo = "/tmp/mercury_fifo";
+    char fifobuf[BUFSIZ];
+    char handle_info_buf[BUFSIZ];
+       
     struct na_sm_mem_handle *na_sm_mem_handle = NULL;
     na_return_t ret = NA_SUCCESS;
 
@@ -1049,8 +1047,45 @@ na_sm_mem_handle_deserialize(na_class_t NA_UNUSED *na_class,
     /* Copy struct */
     memcpy(na_sm_mem_handle, buf, sizeof(struct na_sm_mem_handle));
 
-    *mem_handle = (na_mem_handle_t) na_sm_mem_handle;
 
+    fret = mkfifo(myfifo, 0666);
+    if (fret == -1){
+        fprintf(stderr, "mkfifo failed\n");
+        fprintf(stderr, "Error no is : %d\n", errno);
+        fprintf(stderr, "Error description is : %s\n", strerror(errno));     
+    }
+
+   client_to_server = open(myfifo, O_RDONLY);    
+   while (1)
+        {
+            read(client_to_server, fifobuf, BUFSIZ);
+
+            if (strcmp("exit",fifobuf)==0)
+                {
+                    printf("Server OFF.\n");
+                    break;
+                }
+
+            else if (strcmp("",fifobuf)!=0)
+                {
+                    printf("Received: %s\n", fifobuf);
+                    strncpy(handle_info_buf, fifobuf, strlen(fifobuf));
+                }
+
+            /* clean buf from any data */
+            memset(buf, 0, sizeof(fifobuf));
+        }
+   close(client_to_server);
+   unlink(myfifo);
+   char *brkt;
+   brkt = strtok(handle_info_buf, ",");
+   na_sm_mem_handle->pid = atoi(brkt);
+   brkt = strtok(NULL, ",");
+   na_sm_mem_handle->base = atol(brkt);
+   brkt = strtok(NULL, ",");
+   na_sm_mem_handle->size = atoi(brkt);
+    *mem_handle = (na_mem_handle_t) na_sm_mem_handle;   
+       
 done:
     return ret;
 }
@@ -1069,10 +1104,22 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     struct na_sm_op_id *na_sm_op_id = NULL;
     na_sm_mem_handle_t *na_sm_mem_handle_local = local_mem_handle;
     na_sm_mem_handle_t *na_sm_mem_handle_remote = remote_mem_handle;
-    
-    /* to-do: get pid from na_class / na_conext / local_mem_handle ? */
-    pid_t pid = getpid();
 
+    /* Allocate op_id */
+    na_sm_op_id = (struct na_sm_op_id *) malloc(sizeof(struct na_sm_op_id));
+    if (!na_sm_op_id) {
+        NA_LOG_ERROR("Could not allocate NA SM PUT operation ID");
+        return NA_NOMEM_ERROR;
+    }
+    
+    na_sm_op_id->context = context;
+    na_sm_op_id->type = NA_CB_PUT;
+    na_sm_op_id->callback = callback;
+    na_sm_op_id->arg = arg;
+    na_sm_op_id->completed = NA_FALSE;
+    na_sm_op_id->canceled = 0;
+    
+    pid_t pid = na_sm_mem_handle_remote->pid; 
     local[0].iov_base = na_sm_mem_handle_local->base; 
     local[0].iov_len = na_sm_mem_handle_local->size;
 
@@ -1082,6 +1129,8 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     nwrite = process_vm_writev(pid, local, length, remote, length, 0);
 #endif    
     fprintf(stderr, "nwrite=%d\n", nwrite);
+
+    ret = na_sm_complete(na_sm_op_id);
     
     /* Assign op_id */
     *op_id = (na_op_id_t) na_sm_op_id;
@@ -1100,12 +1149,24 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     ssize_t nread=0;
     na_return_t ret = NA_SUCCESS;
     struct na_sm_op_id *na_sm_op_id = NULL;
+    
     na_sm_mem_handle_t *na_sm_mem_handle_local = local_mem_handle;
     na_sm_mem_handle_t *na_sm_mem_handle_remote = remote_mem_handle;
 
-    /* to-do: get pid from na_class / na_conext / local_mem_handle ? */
-    pid_t pid = getpid();
+    /* Allocate op_id */
+    na_sm_op_id = (struct na_sm_op_id *) malloc(sizeof(struct na_sm_op_id));
+    if (!na_sm_op_id) {
+        NA_LOG_ERROR("Could not allocate NA SM GET operation ID");
+        return NA_NOMEM_ERROR;
+    }
+    na_sm_op_id->context = context;
+    na_sm_op_id->type = NA_CB_GET;
+    na_sm_op_id->callback = callback;
+    na_sm_op_id->arg = arg;
+    na_sm_op_id->completed = NA_FALSE;
+    na_sm_op_id->canceled = 0;
     
+    pid_t pid = na_sm_mem_handle_remote->pid; 
     local[0].iov_base = na_sm_mem_handle_local->base; 
     local[0].iov_len = na_sm_mem_handle_local->size;
     
@@ -1116,7 +1177,9 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
 #endif    
     fprintf(stderr, "nread=%d\n", nread);
     
-    /* Assign op_id */
+
+    ret = na_sm_complete(na_sm_op_id);
+    /* Assign op_id */            
     *op_id = (na_op_id_t) na_sm_op_id;
     return ret;
 }

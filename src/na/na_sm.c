@@ -1179,7 +1179,11 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
 #ifdef LINUX    
     nread = process_vm_readv(pid, local, 1, remote, 1, 0);
 #endif    
-    fprintf(stderr, "nread=%d\n", nread);
+    fprintf(stderr, "pid=%d, remote->base=%zd, remote->size=%d, nread=%d\n",
+            pid,
+            na_sm_mem_handle_remote->base,
+            na_sm_mem_handle_remote->size,
+            nread);
     
 
     ret = na_sm_complete(na_sm_op_id);

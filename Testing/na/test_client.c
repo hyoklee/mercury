@@ -160,14 +160,14 @@ test_bulk(struct na_test_params *params)
             sizeof(int) * params->bulk_size, NA_MEM_READWRITE,
             &params->local_mem_handle);
     if (na_ret != NA_SUCCESS) {
-        fprintf(stderr, "Could not create bulk handle\n");
+        fprintf(stderr, "Could not create bulk memory handle\n");
         return EXIT_FAILURE;
     }
 
     
     na_ret = NA_Mem_register(params->network_class, params->local_mem_handle);
     if (na_ret != NA_SUCCESS) {
-        fprintf(stderr, "Could not create bulk handle\n");
+        fprintf(stderr, "Could not register bulk memory handle\n");
         return EXIT_FAILURE;
     }
 

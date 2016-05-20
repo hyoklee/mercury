@@ -655,8 +655,10 @@ na_sm_addr_free(na_class_t NA_UNUSED *na_class, na_addr_t addr)
         NA_LOG_ERROR("NULL SM addr");
         return  NA_INVALID_PARAM;
     }
-    free(na_sm_addr->sm_path);
-    free(na_sm_addr);
+    if (!na_sm_addr->sm_path) {
+        free(na_sm_addr->sm_path);
+    }
+    free(na_sm_addr);           /* segmentaiton fault. */
     na_sm_addr = NULL;
     return ret;
 }
@@ -933,6 +935,8 @@ na_sm_mem_register(na_class_t *na_class, na_mem_handle_t mem_handle)
     char *result = mmap(NULL, (size_t) na_sm_mem_handle->size,
                         PROT_WRITE | PROT_READ, mmap_flags,
                         descriptor, 0);
+    strncpy(result, na_sm_mem_handle->base, na_sm_mem_handle->size);
+
     if (result == MAP_FAILED) {
         NA_LOG_ERROR("mmap failed().");
         return NA_PROTOCOL_ERROR;

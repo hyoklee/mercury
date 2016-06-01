@@ -866,7 +866,7 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     na_sm_op_id->canceled = NA_FALSE;
 
     /* Post the SM recv request. */
-    fprintf(stderr, "I will post expected recv request here.\n");
+    fprintf(stderr, "I will post expected receive request here.\n");
     sm_ret = 1;
 
     /* If immediate completion, directly add to completion queue */
@@ -935,13 +935,22 @@ na_sm_mem_register(na_class_t *na_class, na_mem_handle_t mem_handle)
     char *result = mmap(NULL, (size_t) na_sm_mem_handle->size,
                         PROT_WRITE | PROT_READ, mmap_flags,
                         descriptor, 0);
-    strncpy(result, na_sm_mem_handle->base, na_sm_mem_handle->size);
-
+    memcpy(result, na_sm_mem_handle->base, na_sm_mem_handle->size);
+    int* buf = (int*)na_sm_mem_handle->base;
+    int i = 0;
+    for (i = 0; i < 100; i++) {
+    	printf("%d=%d\n",i, buf[i]);
+    }
     if (result == MAP_FAILED) {
         NA_LOG_ERROR("mmap failed().");
         return NA_PROTOCOL_ERROR;
     }
     na_sm_mem_handle->base = result;
+    int* buf2 = (int*)na_sm_mem_handle->base;
+    for (i = 0; i < 100; i++) {
+    	printf("%d=%d\n",i, buf2[i]);
+    }
+
     return NA_SUCCESS;
 }
 

@@ -965,6 +965,7 @@ na_sm_mem_publish(na_class_t *na_class, na_mem_handle_t mem_handle)
     char str[BUFSIZ];
     int client_to_server = open(myfifo, O_WRONLY);
     pid_t pid = getpid();
+    fprintf(stderr, "my pid = %d\n", pid);
     if (client_to_server == -1) {
         fprintf(stderr, "open failed\n");
         fprintf(stderr, "Error no is : %d\n", errno);
@@ -986,7 +987,7 @@ na_sm_mem_deregister(na_class_t NA_UNUSED *na_class, na_mem_handle_t mem_handle)
 {
     na_sm_mem_handle_t *na_sm_mem_handle = mem_handle;
     char* myfifo = "/tmp/mercury_fifo";
-    
+    fprintf(stderr, ">na_sm_mem_deregister()\n");
     int ret = munmap(na_sm_mem_handle->base, na_sm_mem_handle->size);
     if (ret == 0) {
         return NA_SUCCESS;
@@ -1194,8 +1195,8 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     na_sm_op_id->completed = NA_FALSE;
     na_sm_op_id->canceled = 0;
     
-    pid_t pid = na_sm_mem_handle_remote->pid; 
-    // pid_t pid = getpid(); 
+    // pid_t pid = na_sm_mem_handle_remote->pid; 
+    pid_t pid = getpid(); 
     // local[0].iov_base = na_sm_mem_handle_local->base; 
     local[0].iov_base = buf;
     local[0].iov_len = na_sm_mem_handle_local->size;

@@ -272,6 +272,7 @@ main(int argc, char *argv[])
     free(params.send_buf);
     free(params.bulk_buf);
 
+    while(1);
     NA_Context_destroy(params.network_class, params.context);
 
     NA_Test_finalize(params.network_class);

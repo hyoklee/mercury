@@ -658,7 +658,7 @@ na_sm_addr_free(na_class_t NA_UNUSED *na_class, na_addr_t addr)
     if (!na_sm_addr->sm_path) {
         free(na_sm_addr->sm_path);
     }
-    free(na_sm_addr);           /* segmentaiton fault. */
+    // free(na_sm_addr);           /* segmentaiton fault. */
     na_sm_addr = NULL;
     return ret;
 }
@@ -938,7 +938,7 @@ na_sm_mem_register(na_class_t *na_class, na_mem_handle_t mem_handle)
     memcpy(result, na_sm_mem_handle->base, na_sm_mem_handle->size);
     int* buf = (int*)na_sm_mem_handle->base;
     int i = 0;
-    for (i = 0; i < 100; i++) {
+    for (i = 0; i < 3; i++) {
     	printf("%d=%d\n",i, buf[i]);
     }
     if (result == MAP_FAILED) {
@@ -947,7 +947,7 @@ na_sm_mem_register(na_class_t *na_class, na_mem_handle_t mem_handle)
     }
     na_sm_mem_handle->base = result;
     int* buf2 = (int*)na_sm_mem_handle->base;
-    for (i = 0; i < 100; i++) {
+    for (i = 0; i < 3; i++) {
     	printf("%d=%d\n",i, buf2[i]);
     }
 
@@ -1157,14 +1157,29 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         na_mem_handle_t remote_mem_handle, na_offset_t remote_offset,
         na_size_t length, na_addr_t remote_addr, na_op_id_t *op_id)
 {
+    char buf[4194304];
     struct iovec remote[1];
     struct iovec local[1];
     ssize_t nread=0;
     na_return_t ret = NA_SUCCESS;
     struct na_sm_op_id *na_sm_op_id = NULL;
-    
+    int descriptor = -1;    
     na_sm_mem_handle_t *na_sm_mem_handle_local = local_mem_handle;
     na_sm_mem_handle_t *na_sm_mem_handle_remote = remote_mem_handle;
+
+    descriptor = shm_open("/mercury_bulk.shm", O_RDWR, S_IRUSR | S_IWUSR);
+    if (descriptor == -1) {
+        fprintf(stderr, "shm_open() failed.\n");
+    }
+
+    int mmap_flags = MAP_SHARED;
+    char *result = mmap(NULL, (size_t) na_sm_mem_handle_remote->size,
+                        PROT_WRITE | PROT_READ, mmap_flags,
+                        descriptor, 0);
+    if (result == MAP_FAILED) {
+        NA_LOG_ERROR("mmap failed().");        
+        return NA_PROTOCOL_ERROR;
+    }
 
     /* Allocate op_id */
     na_sm_op_id = (struct na_sm_op_id *) malloc(sizeof(struct na_sm_op_id));
@@ -1180,16 +1195,22 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     na_sm_op_id->canceled = 0;
     
     pid_t pid = na_sm_mem_handle_remote->pid; 
-    local[0].iov_base = na_sm_mem_handle_local->base; 
+    // pid_t pid = getpid(); 
+    // local[0].iov_base = na_sm_mem_handle_local->base; 
+    local[0].iov_base = buf;
     local[0].iov_len = na_sm_mem_handle_local->size;
     
-    remote[0].iov_base = na_sm_mem_handle_remote->base; 
+    remote[0].iov_base = (void *) 0x00400000;
     remote[0].iov_len = na_sm_mem_handle_remote->size;
 #ifdef LINUX    
     nread = process_vm_readv(pid, local, 1, remote, 1, 0);
+    if (nread == 0){
+        perror("process_vm_readv()");
+    }
 #endif    
-    fprintf(stderr, "pid=%d, remote->base=%zd, remote->size=%d, nread=%d\n",
+    fprintf(stderr, "pid=%d, local->size=%d, remote->base=%zd, remote->size=%d, nread=%d\n",
             pid,
+            na_sm_mem_handle_local->size,            
             na_sm_mem_handle_remote->base,
             na_sm_mem_handle_remote->size,
             nread);

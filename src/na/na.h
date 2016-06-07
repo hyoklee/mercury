@@ -39,14 +39,14 @@ struct na_segment {
  * Functions return 0 for success or NA_XXX_ERROR for failure */
 typedef enum na_return {
     NA_SUCCESS,             /*!< operation succeeded */
-    NA_CANCELED,            /*!< operation was canceled */
     NA_TIMEOUT,             /*!< reached timeout */
     NA_INVALID_PARAM,       /*!< invalid parameter */
     NA_SIZE_ERROR,          /*!< message size error */
     NA_ALIGNMENT_ERROR,     /*!< alignment error */
     NA_PERMISSION_ERROR,    /*!< read/write permission error */
     NA_NOMEM_ERROR,         /*!< no memory error */
-    NA_PROTOCOL_ERROR       /*!< unknown error reported from the protocol layer */
+    NA_PROTOCOL_ERROR,      /*!< unknown error reported from the protocol layer */
+    NA_CANCELED             /*!< operation was canceled */
 } na_return_t;
 
 /* Callback operation type */
@@ -103,9 +103,10 @@ typedef na_return_t (*na_cb_t)(const struct na_cb_info *callback_info);
 #define NA_TAG_UB UINT_MAX
 
 /* The memory attributes associated with the memory handle
- * can be defined as read/write or read only */
-#define NA_MEM_READWRITE  0x00
-#define NA_MEM_READ_ONLY  0x01
+ * can be defined as read only, write only or read/write */
+#define NA_MEM_READ_ONLY   0x01
+#define NA_MEM_WRITE_ONLY  0x02
+#define NA_MEM_READWRITE   0x04
 
 /*********************/
 /* Public Prototypes */
@@ -153,6 +154,18 @@ NA_Finalize(
  */
 NA_EXPORT const char *
 NA_Get_class_name(
+        na_class_t *na_class
+        );
+
+/**
+ * Return the protocol of the NA class.
+ *
+ * \param na_class [IN]         pointer to NA class
+ *
+ * \return Pointer to NA class protocol or NULL in case of failure
+ */
+NA_EXPORT const char *
+NA_Get_class_protocol(
         na_class_t *na_class
         );
 

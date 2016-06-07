@@ -10,6 +10,13 @@ compiler:
 
 sudo: false
 
+addons:
+  apt:
+    packages:
+    - libgmp-dev
+    - libmpfr-dev
+    - libmpc-dev
+
 cache:
   directories:
     - $HOME/install
@@ -18,17 +25,31 @@ env:
   global:
     - MERCURY_DASHBOARD_MODEL="Continuous"
     - MERCURY_NO_LOOP="true"
-    - MERCURY_DO_COVERAGE="false"
-    - MERCURY_DO_MEMCHECK="false"
     - MERCURY_PORT_NAME='tcp://localhost:3344'
   matrix:
     - MERCURY_BUILD_CONFIGURATION="Debug"
     - MERCURY_BUILD_CONFIGURATION="RelWithDebInfo"
     - MERCURY_BUILD_CONFIGURATION="Release"
+    - MERCURY_MEMORYCHECK_TYPE="ThreadSanitizer"
+    - MERCURY_MEMORYCHECK_TYPE="AddressSanitizer"
+
+matrix:
+  exclude:
+   - os: osx
+     env: MERCURY_MEMORYCHECK_TYPE="ThreadSanitizer"
+   - os: linux
+     env: MERCURY_MEMORYCHECK_TYPE="ThreadSanitizer"
+     compiler: clang
+   - os: osx
+     env: MERCURY_MEMORYCHECK_TYPE="AddressSanitizer"
+   - os: linux
+     env: MERCURY_MEMORYCHECK_TYPE="AddressSanitizer"
+     compiler: clang
 
 branches:
   only:
     - master
+    - topic_travis
 
 before_install:
     - echo "Existing directories in $HOME" && ls $HOME
@@ -37,9 +58,11 @@ install:
     - ./Testing/script/travis_build.sh
 
 before_script:
-    - ls -R $HOME/install
-    - export PATH=$PATH:$HOME/install/bin
-    - export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$HOME/install/lib
+    - ls $HOME/install/bin
+    - export PATH=$HOME/install/bin:$PATH
+    - export LD_LIBRARY_PATH=$HOME/install/lib:$HOME/install/lib64:$LD_LIBRARY_PATH
+    - $CC --version
+    - ctest --version
 
 script:
     - ctest -VV --output-on-failure -S ./Testing/script/travis_script.cmake

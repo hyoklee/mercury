@@ -73,9 +73,9 @@ typedef enum hg_return {
     HG_NOMEM_ERROR,     /*!< no memory error */
     HG_PROTOCOL_ERROR,  /*!< protocol does not match */
     HG_NO_MATCH,        /*!< no function match */
-    HG_CHECKSUM_ERROR,   /*!< checksum error */
-    HG_OTHER_ERROR,      /*!< error from mercury_util or external to mercury */
-    HG_CANCELLED        /*!< operation was cancelled */
+    HG_CHECKSUM_ERROR,  /*!< checksum error */
+    HG_CANCELED,        /*!< operation was canceled */
+    HG_OTHER_ERROR      /*!< error from mercury_util or external to mercury */
 } hg_return_t;
 
 /* Callback operation type */
@@ -129,9 +129,9 @@ typedef hg_return_t (*hg_proc_cb_t)(hg_proc_t proc, void *data);
 /*****************/
 
 /* Constant values */
-#define HG_BULK_READWRITE    0x00
-#define HG_BULK_READ_ONLY    0x01
-#define HG_BULK_WRITE_ONLY   0x02
+#define HG_BULK_READ_ONLY   0x01
+#define HG_BULK_WRITE_ONLY  0x02
+#define HG_BULK_READWRITE   0x04
 
 #define HG_MAX_IDLE_TIME     (3600*1000)
 

@@ -147,6 +147,7 @@ struct na_mpi_op_id {
     na_cb_t callback; /* Callback */
     void *arg;
     na_bool_t completed; /* Operation completed */
+    na_bool_t canceled;  /* Operation canceled */
     union {
       struct na_mpi_info_lookup lookup;
       struct na_mpi_info_send_unexpected send_unexpected;
@@ -1355,6 +1356,7 @@ na_mpi_addr_lookup(na_class_t *na_class, na_context_t *context,
     na_mpi_op_id->callback = callback;
     na_mpi_op_id->arg = arg;
     na_mpi_op_id->completed = NA_FALSE;
+    na_mpi_op_id->canceled = NA_FALSE;
 
     /* Allocate addr */
     na_mpi_addr = (struct na_mpi_addr *) malloc(sizeof(struct na_mpi_addr));
@@ -1373,6 +1375,9 @@ na_mpi_addr_lookup(na_class_t *na_class, na_context_t *context,
     memset(na_mpi_addr->port_name, '\0', MPI_MAX_PORT_NAME);
     /* get port_name and remote server rank */
     na_mpi_get_port_info(name, na_mpi_addr->port_name, &na_mpi_addr->rank);
+
+    /* Assign op_id */
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = (na_op_id_t) na_mpi_op_id;
 
     /* Try to connect, must prevent concurrent threads to
      * create new communicators */
@@ -1438,9 +1443,6 @@ na_mpi_addr_lookup(na_class_t *na_class, na_context_t *context,
         NA_LOG_ERROR("Could not complete operation");
         goto done;
     }
-
-    /* Assign op_id */
-    *op_id = (na_op_id_t) na_mpi_op_id;
 
 done:
     if (ret != NA_SUCCESS) {
@@ -1607,7 +1609,11 @@ na_mpi_msg_send_unexpected(na_class_t *na_class, na_context_t *context,
     na_mpi_op_id->callback = callback;
     na_mpi_op_id->arg = arg;
     na_mpi_op_id->completed = NA_FALSE;
+    na_mpi_op_id->canceled = NA_FALSE;
     na_mpi_op_id->info.send_unexpected.data_request = MPI_REQUEST_NULL;
+
+    /* Assign op_id */
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = (na_op_id_t) na_mpi_op_id;
 
     mpi_ret = MPI_Isend(buf, mpi_buf_size, MPI_BYTE, mpi_addr->rank,
             mpi_tag, mpi_addr->comm,
@@ -1618,9 +1624,8 @@ na_mpi_msg_send_unexpected(na_class_t *na_class, na_context_t *context,
         goto done;
     }
 
-    /* Append op_id to op_id list and assign op_id */
+    /* Append op_id to op_id list */
     ret = na_mpi_op_id_list_append(na_class, na_mpi_op_id);
-    *op_id = (na_op_id_t) na_mpi_op_id;
 
 done:
     if (ret != NA_SUCCESS) {
@@ -1650,9 +1655,13 @@ na_mpi_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
     na_mpi_op_id->callback = callback;
     na_mpi_op_id->arg = arg;
     na_mpi_op_id->completed = NA_FALSE;
+    na_mpi_op_id->canceled = NA_FALSE;
     na_mpi_op_id->info.recv_unexpected.buf = buf;
     na_mpi_op_id->info.recv_unexpected.buf_size = (int) buf_size;
     na_mpi_op_id->info.recv_unexpected.remote_addr = NULL;
+
+    /* Assign op_id */
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = (na_op_id_t) na_mpi_op_id;
 
     /* Add op_id to queue of pending unexpected recv ops and make some progress
      * in case messages are already arrived */
@@ -1673,9 +1682,6 @@ na_mpi_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
      * we make progress here just in case we can complete the op at the same
      * time */
     ret = NA_SUCCESS;
-
-    /* Assign op_id */
-    *op_id = (na_op_id_t) na_mpi_op_id;
 
 done:
     if (ret != NA_SUCCESS) {
@@ -1709,7 +1715,11 @@ na_mpi_msg_send_expected(na_class_t *na_class, na_context_t *context,
     na_mpi_op_id->callback = callback;
     na_mpi_op_id->arg = arg;
     na_mpi_op_id->completed = NA_FALSE;
+    na_mpi_op_id->canceled = NA_FALSE;
     na_mpi_op_id->info.send_expected.data_request = MPI_REQUEST_NULL;
+
+    /* Assign op_id */
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = (na_op_id_t) na_mpi_op_id;
 
     mpi_ret = MPI_Isend(buf, mpi_buf_size, MPI_BYTE, mpi_addr->rank,
             mpi_tag, mpi_addr->comm,
@@ -1720,9 +1730,8 @@ na_mpi_msg_send_expected(na_class_t *na_class, na_context_t *context,
         goto done;
     }
 
-    /* Append op_id to op_id list and assign op_id */
+    /* Append op_id to op_id list assign op_id */
     ret = na_mpi_op_id_list_append(na_class, na_mpi_op_id);
-    *op_id = (na_op_id_t) na_mpi_op_id;
 
 done:
     if (ret != NA_SUCCESS) {
@@ -1756,9 +1765,13 @@ na_mpi_msg_recv_expected(na_class_t *na_class, na_context_t *context,
     na_mpi_op_id->callback = callback;
     na_mpi_op_id->arg = arg;
     na_mpi_op_id->completed = NA_FALSE;
+    na_mpi_op_id->canceled = NA_FALSE;
     na_mpi_op_id->info.recv_expected.buf_size = mpi_buf_size;
     na_mpi_op_id->info.recv_expected.actual_size = 0;
     na_mpi_op_id->info.recv_expected.data_request = MPI_REQUEST_NULL;
+
+    /* Assign op_id */
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = (na_op_id_t) na_mpi_op_id;
 
     mpi_ret = MPI_Irecv(buf, mpi_buf_size, MPI_BYTE, mpi_addr->rank,
             mpi_tag, mpi_addr->comm,
@@ -1769,9 +1782,8 @@ na_mpi_msg_recv_expected(na_class_t *na_class, na_context_t *context,
         goto done;
     }
 
-    /* Append op_id to op_id list and assign op_id */
+    /* Append op_id to op_id list */
     ret = na_mpi_op_id_list_append(na_class, na_mpi_op_id);
-    *op_id = (na_op_id_t) na_mpi_op_id;
 
 done:
     if (ret != NA_SUCCESS) {
@@ -1937,6 +1949,7 @@ na_mpi_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     na_mpi_op_id->callback = callback;
     na_mpi_op_id->arg = arg;
     na_mpi_op_id->completed = NA_FALSE;
+    na_mpi_op_id->canceled = NA_FALSE;
     na_mpi_op_id->info.put.rma_request = MPI_REQUEST_NULL;
     na_mpi_op_id->info.put.data_request = MPI_REQUEST_NULL;
     na_mpi_op_id->info.put.internal_progress = NA_FALSE;
@@ -1956,6 +1969,9 @@ na_mpi_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     na_mpi_rma_info->count = mpi_length;
     na_mpi_rma_info->tag = na_mpi_gen_rma_tag(na_class);
     na_mpi_op_id->info.put.rma_info = na_mpi_rma_info;
+
+    /* Assign op_id */
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = (na_op_id_t) na_mpi_op_id;
 
     /* Post the MPI send request */
     mpi_ret = MPI_Isend(na_mpi_rma_info, sizeof(struct na_mpi_rma_info),
@@ -1977,9 +1993,8 @@ na_mpi_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         goto done;
     }
 
-    /* Append op_id to op_id list and assign op_id */
+    /* Append op_id to op_id list */
     ret = na_mpi_op_id_list_append(na_class, na_mpi_op_id);
-    *op_id = (na_op_id_t) na_mpi_op_id;
 
 done:
     if (ret != NA_SUCCESS) {
@@ -2022,6 +2037,7 @@ na_mpi_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     na_mpi_op_id->callback = callback;
     na_mpi_op_id->arg = arg;
     na_mpi_op_id->completed = NA_FALSE;
+    na_mpi_op_id->canceled = NA_FALSE;
     na_mpi_op_id->info.get.rma_request = MPI_REQUEST_NULL;
     na_mpi_op_id->info.get.data_request = MPI_REQUEST_NULL;
     na_mpi_op_id->info.put.internal_progress = NA_FALSE;
@@ -2041,6 +2057,9 @@ na_mpi_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     na_mpi_rma_info->count = mpi_length;
     na_mpi_rma_info->tag = na_mpi_gen_rma_tag(na_class);
     na_mpi_op_id->info.get.rma_info = na_mpi_rma_info;
+
+    /* Assign op_id */
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = (na_op_id_t) na_mpi_op_id;
 
     /* Post the MPI send request */
     mpi_ret = MPI_Isend(na_mpi_rma_info, sizeof(struct na_mpi_rma_info),
@@ -2062,9 +2081,8 @@ na_mpi_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         goto done;
     }
 
-    /* Append op_id to op_id list and assign op_id */
+    /* Append op_id to op_id list */
     ret = na_mpi_op_id_list_append(na_class, na_mpi_op_id);
-    *op_id = (na_op_id_t) na_mpi_op_id;
 
 done:
     if (ret != NA_SUCCESS) {
@@ -2285,6 +2303,7 @@ na_mpi_progress_unexpected_rma(na_class_t *na_class, na_context_t *context,
     na_mpi_op_id->callback = NULL;
     na_mpi_op_id->arg = NULL;
     na_mpi_op_id->completed = NA_FALSE;
+    na_mpi_op_id->canceled = NA_FALSE;
 
     switch (na_mpi_rma_info->op) {
         /* Remote wants to do a put so wait in a recv */
@@ -2502,7 +2521,7 @@ na_mpi_complete(struct na_mpi_op_id *na_mpi_op_id)
         goto done;
     }
     callback_info->arg = na_mpi_op_id->arg;
-    callback_info->ret = ret;
+    callback_info->ret = (na_mpi_op_id->canceled) ? NA_CANCELED : ret;
     callback_info->type = na_mpi_op_id->type;
 
     switch (na_mpi_op_id->type) {
@@ -2521,6 +2540,15 @@ na_mpi_complete(struct na_mpi_op_id *na_mpi_op_id)
             na_mpi_remote_addr = na_mpi_op_id->info.recv_unexpected.remote_addr;
             status = &na_mpi_op_id->info.recv_unexpected.status;
 
+            if (!na_mpi_remote_addr) {
+                /* In case of cancellation where no recv'd data */
+                callback_info->info.recv_unexpected.actual_buf_size = 0;
+                callback_info->info.recv_unexpected.source = NA_ADDR_NULL;
+                callback_info->info.recv_unexpected.tag = 0;
+                break;
+            }
+
+            /* Check count */
             mpi_ret = MPI_Get_count(status, MPI_BYTE, &recv_size);
             if (mpi_ret != MPI_SUCCESS) {
                 NA_LOG_ERROR("MPI_Get_count() failed");
@@ -2640,6 +2668,7 @@ na_mpi_cancel(na_class_t *na_class, na_context_t NA_UNUSED *context,
                 ret = NA_PROTOCOL_ERROR;
                 goto done;
             }
+            na_mpi_op_id->canceled = NA_TRUE;
             break;
         case NA_CB_RECV_UNEXPECTED:
         {
@@ -2652,6 +2681,13 @@ na_mpi_cancel(na_class_t *na_class, na_context_t NA_UNUSED *context,
                 /* Push back unexpected op_id to queue if it does not match */
                 if (na_mpi_pop_op_id != na_mpi_op_id) {
                     na_mpi_msg_unexpected_op_push(na_class, na_mpi_pop_op_id);
+                } else {
+                    na_mpi_op_id->canceled = NA_TRUE;
+                    ret = na_mpi_complete(na_mpi_op_id);
+                    if (ret != NA_SUCCESS) {
+                        NA_LOG_ERROR("Could not complete op id");
+                        goto done;
+                    }
                 }
             }
         }
@@ -2663,6 +2699,7 @@ na_mpi_cancel(na_class_t *na_class, na_context_t NA_UNUSED *context,
                 ret = NA_PROTOCOL_ERROR;
                 goto done;
             }
+            na_mpi_op_id->canceled = NA_TRUE;
             break;
         case NA_CB_RECV_EXPECTED:
             mpi_ret = MPI_Cancel(&na_mpi_op_id->info.recv_expected.data_request);
@@ -2671,6 +2708,7 @@ na_mpi_cancel(na_class_t *na_class, na_context_t NA_UNUSED *context,
                 ret = NA_PROTOCOL_ERROR;
                 goto done;
             }
+            na_mpi_op_id->canceled = NA_TRUE;
             break;
         case NA_CB_PUT:         /* Related to bulk */
             /* TODO */
@@ -2683,7 +2721,6 @@ na_mpi_cancel(na_class_t *na_class, na_context_t NA_UNUSED *context,
             ret = NA_INVALID_PARAM;
             break;
     }
-    free(na_mpi_op_id);
 
 done:
     return ret;

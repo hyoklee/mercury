@@ -26,7 +26,7 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <errno.h>
-#include <linux/limits.h>
+//  #include <linux/limits.h>
 
 /****************/
 /* Local Macros */
@@ -1192,8 +1192,9 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     remote[0].iov_base = na_sm_mem_handle_remote->base;
     remote[0].iov_len = 100;
     // remote[0].iov_len = na_sm_mem_handle_remote->size;
-
+#ifdef LINUX
     nread = process_vm_readv(pid, local, 1, remote, 1, 0);
+#endif    
     if (nread == 0){
         perror("process_vm_readv()");
     }

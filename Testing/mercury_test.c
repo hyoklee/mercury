@@ -18,6 +18,7 @@
 #ifdef MERCURY_TESTING_HAS_THREAD_POOL
 #include "mercury_thread_pool.h"
 #endif
+#include "mercury_thread_mutex.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -37,6 +38,7 @@ static hg_addr_t hg_test_addr_g = HG_ADDR_NULL;
 static int hg_test_rank_g = 0;
 
 hg_bulk_t hg_test_local_bulk_handle_g = HG_BULK_NULL;
+hg_thread_mutex_t hg_test_local_bulk_handle_mutex_g;
 
 static char **hg_test_addr_name_table_g = NULL;
 static hg_addr_t *hg_test_addr_table_g = NULL;
@@ -129,7 +131,7 @@ hg_test_finalize_rpc(void)
 
 /*---------------------------------------------------------------------------*/
 static void
-hg_test_finalize_rpc2(na_addr_t addr)
+hg_test_finalize_rpc2(hg_addr_t addr)
 {
     hg_return_t hg_ret;
     hg_handle_t handle;
@@ -251,11 +253,10 @@ hg_test_register(hg_class_t *hg_class)
 
 /*---------------------------------------------------------------------------*/
 hg_class_t *
-HG_Test_client_init(int argc, char *argv[], na_addr_t *addr, int *rank,
+HG_Test_client_init(int argc, char *argv[], hg_addr_t *addr, int *rank,
         hg_context_t **context, hg_request_class_t **request_class)
 {
     char test_addr_name[NA_TEST_MAX_ADDR_NAME];
-    na_return_t na_ret;
     hg_return_t ret;
 
     hg_test_na_class_g = NA_Test_client_init(argc, argv, test_addr_name,
@@ -277,6 +278,7 @@ HG_Test_client_init(int argc, char *argv[], na_addr_t *addr, int *rank,
 
         /* In case of self we need the local thread pool */
 #ifdef MERCURY_TESTING_HAS_THREAD_POOL
+        hg_thread_mutex_init(&hg_test_local_bulk_handle_mutex_g);
         hg_thread_pool_init(MERCURY_TESTING_NUM_THREADS, &hg_test_thread_pool_g);
         printf("# Starting server with %d threads...\n", MERCURY_TESTING_NUM_THREADS);
 #endif
@@ -286,9 +288,9 @@ HG_Test_client_init(int argc, char *argv[], na_addr_t *addr, int *rank,
                 &hg_test_local_bulk_handle_g);
     } else {
         /* Look up addr using port name info */
-        na_ret = HG_Hl_addr_lookup_wait(HG_CONTEXT_DEFAULT, HG_REQUEST_CLASS_DEFAULT,
+        ret = HG_Hl_addr_lookup_wait(HG_CONTEXT_DEFAULT, HG_REQUEST_CLASS_DEFAULT,
                 test_addr_name, &hg_test_addr_g, HG_MAX_IDLE_TIME);
-        if (na_ret != NA_SUCCESS) {
+        if (ret != HG_SUCCESS) {
             fprintf(stderr, "Could not find addr %s\n", test_addr_name);
             goto done;
         }
@@ -311,7 +313,7 @@ done:
 
 /*---------------------------------------------------------------------------*/
 hg_class_t *
-HG_Test_server_init(int argc, char *argv[], na_addr_t **addr_table,
+HG_Test_server_init(int argc, char *argv[], hg_addr_t **addr_table,
         unsigned int *addr_table_size, unsigned int *max_number_of_peers,
         hg_context_t **context)
 {
@@ -327,6 +329,7 @@ HG_Test_server_init(int argc, char *argv[], na_addr_t **addr_table,
     hg_atomic_set32(&hg_test_finalizing_count_g, 0);
 
 #ifdef MERCURY_TESTING_HAS_THREAD_POOL
+    hg_thread_mutex_init(&hg_test_local_bulk_handle_mutex_g);
     hg_thread_pool_init(MERCURY_TESTING_NUM_THREADS, &hg_test_thread_pool_g);
     printf("# Starting server with %d threads...\n", MERCURY_TESTING_NUM_THREADS);
 #endif
@@ -406,6 +409,7 @@ HG_Test_finalize(hg_class_t *hg_class)
 
 #ifdef MERCURY_TESTING_HAS_THREAD_POOL
     hg_thread_pool_destroy(hg_test_thread_pool_g);
+    hg_thread_mutex_destroy(&hg_test_local_bulk_handle_mutex_g);
 #endif
 
     /* Finalize interface */

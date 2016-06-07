@@ -17,7 +17,7 @@
 #include <stdlib.h>
 
 extern hg_atomic_int32_t hg_test_finalizing_count_g;
-extern na_addr_t *na_addr_table;
+extern hg_addr_t *hg_addr_table;
 
 #ifdef MERCURY_TESTING_HAS_THREAD_POOL
 static HG_THREAD_RETURN_TYPE
@@ -31,7 +31,7 @@ hg_progress_thread(void *arg)
         if (hg_atomic_cas32(&hg_test_finalizing_count_g, 1, 1))
             break;
 
-        ret = HG_Progress(context, 1000);
+        ret = HG_Progress(context, 100);
     } while (ret == HG_SUCCESS || ret == HG_TIMEOUT);
 
     printf("Exiting\n");
@@ -54,7 +54,7 @@ main(int argc, char *argv[])
 #endif
     hg_return_t ret = HG_SUCCESS;
 
-    hg_class = HG_Test_server_init(argc, argv, &na_addr_table,
+    hg_class = HG_Test_server_init(argc, argv, &hg_addr_table,
             NULL, &number_of_peers, &context);
 #ifdef MERCURY_TESTING_HAS_THREAD_POOL
     hg_thread_create(&progress_thread, hg_progress_thread, context);
@@ -63,7 +63,7 @@ main(int argc, char *argv[])
         if (hg_atomic_cas32(&hg_test_finalizing_count_g, 1, 1))
             break;
 
-        ret = HG_Trigger(context, 1000, 1, NULL);
+        ret = HG_Trigger(context, 100, 1, NULL);
     } while (ret == HG_SUCCESS || ret == HG_TIMEOUT);
 #else
     do {

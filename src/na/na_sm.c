@@ -620,7 +620,8 @@ na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
         free(na_sm_op_id);
         return ret;
     }
-    *op_id = (na_op_id_t) na_sm_op_id;
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = na_sm_op_id;
+    // *op_id = (na_op_id_t) na_sm_op_id;
     
     return ret;
 }
@@ -759,7 +760,8 @@ na_sm_msg_send_unexpected(na_class_t NA_UNUSED *na_class,
     }
 
     /* Assign op_id */
-    *op_id = (na_op_id_t) na_sm_op_id;
+    // *op_id = (na_op_id_t) na_sm_op_id;
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = na_sm_op_id;
     return ret;
 }
 
@@ -794,8 +796,8 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
     hg_thread_mutex_unlock(
             &NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
 
-    
-    *op_id = (na_op_id_t) na_sm_op_id;
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = na_sm_op_id;
+    // *op_id = (na_op_id_t) na_sm_op_id;
     return ret;
 }
 
@@ -836,7 +838,8 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     }
 
     /* Assign op_id */
-    *op_id = (na_op_id_t) na_sm_op_id;
+    // *op_id = (na_op_id_t) na_sm_op_id;
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = na_sm_op_id;
     return ret;
 }
 
@@ -881,8 +884,8 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     }
 
     /* Assign op_id */
-    *op_id = (na_op_id_t) na_sm_op_id;
-
+    // *op_id = (na_op_id_t) na_sm_op_id;
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = na_sm_op_id;
     return ret;
 }
 
@@ -1148,7 +1151,8 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     ret = na_sm_complete(na_sm_op_id);
     
     /* Assign op_id */
-    *op_id = (na_op_id_t) na_sm_op_id;
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = na_sm_op_id;
+    // *op_id = (na_op_id_t) na_sm_op_id;
     return ret;
 }
 
@@ -1215,8 +1219,9 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         NA_LOG_ERROR("Could not complete operation");
         free(na_sm_op_id);
     }
-    /* Assign op_id */            
-    *op_id = (na_op_id_t) na_sm_op_id;
+    /* Assign op_id */
+    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = na_sm_op_id;
+    // *op_id = (na_op_id_t) na_sm_op_id;
     return ret;
 }
 

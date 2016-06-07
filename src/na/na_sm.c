@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <errno.h>
+#include <linux/limits.h>
 
 /****************/
 /* Local Macros */
@@ -99,7 +100,7 @@ struct na_sm_info_put {
 };
 
 struct na_sm_info_get {
-
+    na_bool_t   internal_progress;
 };
 
 /* TODO */
@@ -1158,30 +1159,14 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         na_mem_handle_t remote_mem_handle, na_offset_t remote_offset,
         na_size_t length, na_addr_t remote_addr, na_op_id_t *op_id)
 {
-    char buf[4194304];
+    char buf[100];
     struct iovec remote[1];
     struct iovec local[1];
     ssize_t nread=0;
     na_return_t ret = NA_SUCCESS;
     struct na_sm_op_id *na_sm_op_id = NULL;
-    int descriptor = -1;    
     na_sm_mem_handle_t *na_sm_mem_handle_local = local_mem_handle;
     na_sm_mem_handle_t *na_sm_mem_handle_remote = remote_mem_handle;
-
-    descriptor = shm_open("/mercury_bulk.shm", O_RDWR, S_IRUSR | S_IWUSR);
-    if (descriptor == -1) {
-        fprintf(stderr, "shm_open() failed.\n");
-    }
-
-    int mmap_flags = MAP_SHARED;
-    char *result = mmap(NULL, (size_t) na_sm_mem_handle_remote->size,
-                        PROT_WRITE | PROT_READ, mmap_flags,
-                        descriptor, 0);
-    if (result == MAP_FAILED) {
-        NA_LOG_ERROR("mmap failed().");        
-        return NA_PROTOCOL_ERROR;
-    }
-
     /* Allocate op_id */
     na_sm_op_id = (struct na_sm_op_id *) malloc(sizeof(struct na_sm_op_id));
     if (!na_sm_op_id) {
@@ -1194,30 +1179,41 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     na_sm_op_id->arg = arg;
     na_sm_op_id->completed = NA_FALSE;
     na_sm_op_id->canceled = 0;
+
     
-    // pid_t pid = na_sm_mem_handle_remote->pid; 
-    pid_t pid = getpid(); 
+    pid_t pid = na_sm_mem_handle_remote->pid; 
+    // pid_t pid = getpid(); 
     // local[0].iov_base = na_sm_mem_handle_local->base; 
     local[0].iov_base = buf;
-    local[0].iov_len = na_sm_mem_handle_local->size;
+    // local[0].iov_len = na_sm_mem_handle_local->size;
+    local[0].iov_len = 100;
     
-    remote[0].iov_base = (void *) 0x00400000;
-    remote[0].iov_len = na_sm_mem_handle_remote->size;
-#ifdef LINUX    
+    // remote[0].iov_base = (void *) 0x00400000;
+    remote[0].iov_base = na_sm_mem_handle_remote->base;
+    remote[0].iov_len = 100;
+    // remote[0].iov_len = na_sm_mem_handle_remote->size;
+
     nread = process_vm_readv(pid, local, 1, remote, 1, 0);
     if (nread == 0){
         perror("process_vm_readv()");
     }
-#endif    
-    fprintf(stderr, "pid=%d, local->size=%d, remote->base=%zd, remote->size=%d, nread=%d\n",
-            pid,
-            na_sm_mem_handle_local->size,            
-            na_sm_mem_handle_remote->base,
-            na_sm_mem_handle_remote->size,
-            nread);
-    
+    else {
+      fprintf(stderr, "pid=%d, local->size=%d, remote->base=0x%llx, remote->size=%d, nread=%d\n",
+	      pid,
+	      na_sm_mem_handle_local->size,            
+	      na_sm_mem_handle_remote->base,
+	      na_sm_mem_handle_remote->size,
+	      nread);
+      for(int i = 0; i < nread; i++)
+	fprintf(stderr, "%x\n", buf[i]);
+
+    }
 
     ret = na_sm_complete(na_sm_op_id);
+    if (ret != NA_SUCCESS) {
+        NA_LOG_ERROR("Could not complete operation");
+        free(na_sm_op_id);
+    }
     /* Assign op_id */            
     *op_id = (na_op_id_t) na_sm_op_id;
     return ret;
@@ -1332,7 +1328,8 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
     case NA_CB_GET:
         NA_LOG_ERROR("Got NA_CB_GET.");        
         /* Transfer is now done so free RMA info */
-        // free(na_sm_op_id->info.get.rma_info);
+        // free(na_sm_op_id->info.get);
+	// na_sm_op_id->info.get = NULL;
         // na_sm_op_id->info.get.rma_info = NULL;
         break;
     default:
@@ -1354,6 +1351,13 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
 static void
 na_sm_release(struct na_cb_info *callback_info, void *arg)
 {
+    struct na_sm_op_id *na_sm_op_id = (struct na_sm_op_id *) arg;
+
+    if (na_sm_op_id && !na_sm_op_id->completed) {
+        NA_LOG_ERROR("Releasing resources from an uncompleted operation");
+    }
+    free(callback_info);
+    free(na_sm_op_id);
 
  
 }

@@ -754,6 +754,17 @@ hg_bulk_transfer(hg_context_t *context, hg_cb_t callback, void *arg,
     /* Assign op_id */
     if (op_id && op_id != HG_OP_ID_IGNORE) *op_id = (hg_op_id_t) hg_bulk_op_id;
 
+    /* Allocate memory for NA operation IDs */
+    hg_bulk_op_id->na_op_ids = malloc(sizeof(na_op_id_t) * hg_bulk_op_id->op_count);
+    if (!hg_bulk_op_id->na_op_ids) {
+        HG_LOG_ERROR("Could not allocate memory for op_ids");
+        ret = HG_NOMEM_ERROR;
+        goto done;
+    }
+
+    /* Assign op_id */
+    if (op_id && op_id != HG_OP_ID_IGNORE) *op_id = (hg_op_id_t) hg_bulk_op_id;
+
     /* Do actual transfer */
     ret = hg_bulk_transfer_pieces(na_bulk_op, origin_addr, hg_bulk_origin,
             origin_segment_start_index, origin_segment_start_offset,

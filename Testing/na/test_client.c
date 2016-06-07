@@ -273,6 +273,7 @@ main(int argc, char *argv[])
     free(params.bulk_buf);
 
     NA_Context_destroy(params.na_class, params.context);
+
     NA_Test_finalize(params.na_class);
 
     return EXIT_SUCCESS;

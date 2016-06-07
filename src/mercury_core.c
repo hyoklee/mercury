@@ -2183,8 +2183,6 @@ hg_core_cancel(struct hg_handle *hg_handle)
             }            
             /* call complete() */
         }
-
-
     }
 done:
     return ret;

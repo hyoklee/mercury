@@ -249,7 +249,6 @@ hg_test_bulk_transfer_cb(const struct hg_cb_info *hg_cb_info)
         goto done;
     }
 
-
     if (hg_cb_info->ret == HG_SUCCESS) {
         /* Call bulk_write */
         HG_Bulk_access(local_bulk_handle, 0, bulk_args->nbytes,
@@ -326,7 +325,6 @@ HG_TEST_RPC_CB(hg_test_bulk_write, handle)
     ret = HG_Bulk_transfer(hg_info->context, hg_test_bulk_transfer_cb,
         bulk_args, HG_BULK_PULL, hg_info->addr, origin_bulk_handle, 0,
         local_bulk_handle, 0, bulk_args->nbytes, &hg_bulk_op_id);
-
     if (ret != HG_SUCCESS) {
         fprintf(stderr, "Could not read bulk data\n");
         return ret;

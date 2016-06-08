@@ -26,7 +26,7 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <errno.h>
-//  #include <linux/limits.h>
+#include <linux/limits.h>
 
 /****************/
 /* Local Macros */
@@ -54,7 +54,7 @@ typedef struct na_sm_mem_handle na_sm_mem_handle_t;
 struct na_sm_addr {
     na_sm_op_id_t	*na_sm_op_id;	/* For addr_lookup() */    
     pid_t pid;             /* remote process id */
-    struct iovec remote[1];     /* remote address  */
+  // struct iovec remote[1];     /* remote address  */
     char* sm_path;         /* Path to shared memory */
     na_bool_t  unexpected; /* Address generated from unexpected recv */
     na_bool_t  self;       /* Boolean for self */
@@ -124,9 +124,9 @@ struct na_sm_op_id {
 
 /* TODO check what is needed here */
 struct na_sm_private_data {
-    char *listen_addr;                            /* Listen addr */
+  // char *listen_addr;                            /* Listen addr */
 
-    hg_thread_mutex_t test_unexpected_mutex;      /* Mutex */
+  // hg_thread_mutex_t test_unexpected_mutex;      /* Mutex */
     hg_queue_t *unexpected_msg_queue;             /* Unexpected message queue */
     hg_thread_mutex_t unexpected_msg_queue_mutex; /* Mutex */
     hg_queue_t *unexpected_op_queue;              /* Unexpected op queue */
@@ -630,9 +630,11 @@ na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
 static na_return_t
 na_sm_addr_self(na_class_t NA_UNUSED *na_class, na_addr_t *addr)
 {
+
     struct na_sm_addr *na_sm_addr = NULL;
     na_return_t ret = NA_SUCCESS;
 
+    fprintf(stderr, ">na_sm_addr_self()\n");
     na_sm_addr = (struct na_sm_addr *) malloc(sizeof(struct na_sm_addr));
     if (!na_sm_addr) {
         NA_LOG_ERROR("Could not allocate SM addr");
@@ -682,7 +684,8 @@ na_sm_addr_to_string(na_class_t *na_class, char *buf,
     na_sm_addr_t *na_sm_addr = (na_sm_addr_t *)addr;    
     na_return_t ret = NA_SUCCESS;
     na_size_t string_len;
-    
+
+    fprintf(stderr, ">na_sm_addr_to_string()\n");
     string_len = strlen(na_sm_addr->sm_path);
     if (buf) {
         if (string_len >= *buf_size) {
@@ -784,6 +787,7 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
     na_sm_op_id->callback = callback;
     na_sm_op_id->arg = arg;
     na_sm_op_id->info.recv_unexpected.buf = buf;
+
     /* Push it into queue. */
     hg_thread_mutex_lock(&NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
 
@@ -1091,11 +1095,11 @@ na_sm_mem_handle_deserialize(na_class_t NA_UNUSED *na_class,
                 }
 
             /* clean buf from any data */
-            memset(buf, 0, sizeof(fifobuf));
+            memset(fifobuf, 0, sizeof(fifobuf));
         }
    close(client_to_server);
    unlink(myfifo);
-   char *brkt;
+   char *brkt = NULL;
    brkt = strtok(handle_info_buf, ",");
    na_sm_mem_handle->pid = atoi(brkt);
    brkt = strtok(NULL, ",");
@@ -1103,7 +1107,7 @@ na_sm_mem_handle_deserialize(na_class_t NA_UNUSED *na_class,
    brkt = strtok(NULL, ",");
    na_sm_mem_handle->size = atoi(brkt);
     *mem_handle = (na_mem_handle_t) na_sm_mem_handle;   
-       
+  fprintf(stderr, "<na_sm_mem_handle_deserialize()\n");
 done:
     return ret;
 }
@@ -1265,7 +1269,7 @@ na_sm_progress(na_class_t *na_class, na_context_t *context,
             }
         }
         else {
-            
+	  fprintf(stderr, "na_sm_op_id is NULL.\n");
         }
         
         if (ret != NA_SUCCESS) {
@@ -1308,10 +1312,11 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
     callback_info->arg = na_sm_op_id->arg;
     callback_info->ret = ret;
     callback_info->type = na_sm_op_id->type;
+
     switch (na_sm_op_id->type) {
     case NA_CB_LOOKUP:
         callback_info->info.lookup.addr = na_sm_op_id->info.lookup.addr;
-        // NA_LOG_ERROR("Got NA_CB_LOOKUP.");
+        NA_LOG_ERROR("Got NA_CB_LOOKUP.");
         break;
     case NA_CB_RECV_EXPECTED:
         NA_LOG_ERROR("Got NA_CB_RECV_EXPECTED.");
@@ -1320,6 +1325,10 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
         NA_LOG_ERROR("Got NA_CB_SEND_EXPECTED.");
         break;
     case NA_CB_RECV_UNEXPECTED:
+        callback_info->info.recv_unexpected.source = 22222;
+	callback_info->info.recv_unexpected.actual_buf_size = 0;
+	callback_info->info.recv_unexpected.tag = 3;
+
         NA_LOG_ERROR("Got NA_CB_RECV_UNEXPECTED.");
         break;        
     case NA_CB_SEND_UNEXPECTED:
@@ -1357,6 +1366,7 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
 static void
 na_sm_release(struct na_cb_info *callback_info, void *arg)
 {
+    fprintf(stderr, ">na_sm_release()\n");
     struct na_sm_op_id *na_sm_op_id = (struct na_sm_op_id *) arg;
 
     if (na_sm_op_id && !na_sm_op_id->completed) {
@@ -1364,8 +1374,6 @@ na_sm_release(struct na_cb_info *callback_info, void *arg)
     }
     free(callback_info);
     free(na_sm_op_id);
-
- 
 }
 
 /*---------------------------------------------------------------------------*/

@@ -43,6 +43,7 @@
 #define NA_SM_PRIVATE_DATA(na_class) \
     ((struct na_sm_private_data *)(na_class->private_data))
 
+#define LINUX 1
 /************************************/
 /* Local Type and Struct Definition */
 /************************************/
@@ -994,7 +995,6 @@ static na_return_t
 na_sm_mem_deregister(na_class_t NA_UNUSED *na_class, na_mem_handle_t mem_handle)
 {
     na_sm_mem_handle_t *na_sm_mem_handle = mem_handle;
-    char* myfifo = "/tmp/mercury_fifo";
     fprintf(stderr, ">na_sm_mem_deregister()\n");
     int ret = munmap(na_sm_mem_handle->base, na_sm_mem_handle->size);
     if (ret == 0) {
@@ -1119,6 +1119,7 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         na_mem_handle_t remote_mem_handle, na_offset_t remote_offset,
         na_size_t length, na_addr_t remote_addr, na_op_id_t *op_id)
 {
+    char buf[100];
     struct iovec remote[1];
     struct iovec local[1];
     ssize_t nwrite=0;
@@ -1126,6 +1127,9 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     struct na_sm_op_id *na_sm_op_id = NULL;
     na_sm_mem_handle_t *na_sm_mem_handle_local = local_mem_handle;
     na_sm_mem_handle_t *na_sm_mem_handle_remote = remote_mem_handle;
+
+    for(int i = 0; i < 100; i++)
+      buf[i] = i;
 
     /* Allocate op_id */
     na_sm_op_id = (struct na_sm_op_id *) malloc(sizeof(struct na_sm_op_id));
@@ -1142,15 +1146,32 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     na_sm_op_id->canceled = 0;
     
     pid_t pid = na_sm_mem_handle_remote->pid; 
-    local[0].iov_base = na_sm_mem_handle_local->base; 
-    local[0].iov_len = na_sm_mem_handle_local->size;
+    // local[0].iov_base = na_sm_mem_handle_local->base; 
+    local[0].iov_base = buf;
+    // local[0].iov_len = na_sm_mem_handle_local->size;
+    local[0].iov_len = 100;
 
     remote[0].iov_base = na_sm_mem_handle_remote->base;
-    remote[0].iov_len = na_sm_mem_handle_remote->size;
+    remote[0].iov_len = 100;
+    // remote[0].iov_len = na_sm_mem_handle_remote->size;
 #ifdef LINUX    
-    nwrite = process_vm_writev(pid, local, length, remote, length, 0);
+    nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
 #endif    
-    fprintf(stderr, "nwrite=%d\n", nwrite);
+    if (nwrite < 1){
+        perror("process_vm_writev()");
+    }
+    else {
+      fprintf(stderr, "pid=%d, local->size=%d, remote->base=0x%llx, remote->size=%d, nwrite=%d\n",
+	      pid,
+	      na_sm_mem_handle_local->size,            
+	      na_sm_mem_handle_remote->base,
+	      na_sm_mem_handle_remote->size,
+	      nwrite);
+      for(int i = 0; i < nwrite; i++)
+	fprintf(stderr, "%x\n", buf[i]);
+
+    }
+
 
     ret = na_sm_complete(na_sm_op_id);
     

@@ -27,6 +27,7 @@
 #include <sys/mman.h>
 #include <errno.h>
 #include <linux/limits.h>
+#include <sys/epoll.h>
 
 /****************/
 /* Local Macros */
@@ -35,6 +36,7 @@
 /* Msg sizes */
 #define NA_SM_UNEXPECTED_SIZE 4096
 #define NA_SM_EXPECTED_SIZE  NA_SM_UNEXPECTED_SIZE 
+#define NA_SM_EPOLL_MAX_EVENTS 64
 
 /* Max tag */
 #define NA_SM_MAX_TAG (NA_TAG_UB >> 2)
@@ -55,7 +57,6 @@ typedef struct na_sm_mem_handle na_sm_mem_handle_t;
 struct na_sm_addr {
     na_sm_op_id_t	*na_sm_op_id;	/* For addr_lookup() */    
     pid_t pid;             /* remote process id */
-  // struct iovec remote[1];     /* remote address  */
     char* sm_path;         /* Path to shared memory */
     na_bool_t  unexpected; /* Address generated from unexpected recv */
     na_bool_t  self;       /* Boolean for self */
@@ -495,8 +496,6 @@ na_sm_initialize(na_class_t * na_class, const struct na_info *na_info,
     }
     
     ret = na_sm_init(na_class);
-    // na_sm_put(na_class, NULL, NULL, NULL, NULL, 100, NULL, 200, 100, NULL, NULL) ;
-    // na_sm_get(na_class, ...)
     return ret;
     
 }
@@ -580,7 +579,9 @@ na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
     struct na_sm_op_id *na_sm_op_id = NULL;
     na_return_t ret = NA_SUCCESS;
     na_sm_addr_t *na_sm_addr = NULL;
-    
+
+    fprintf(stderr, ">na_sm_addr_lookup(name=%s)\n", name);    
+
     /* Allocate op_id */
     na_sm_op_id = (na_sm_op_id_t *) calloc(1, sizeof(*na_sm_op_id));
     if (!na_sm_op_id) {
@@ -734,7 +735,15 @@ na_sm_msg_send_unexpected(na_class_t NA_UNUSED *na_class,
         na_size_t buf_size, na_addr_t dest, na_tag_t tag, na_op_id_t *op_id)
 {
     struct na_sm_op_id *na_sm_op_id = NULL;    
+    struct na_sm_addr *na_sm_addr = (struct na_sm_addr*) dest;
     na_return_t ret = NA_SUCCESS;
+    struct iovec local[1];
+    struct iovec remote[1];
+    int mmap_flags = MAP_SHARED;        
+    ssize_t nwrite=0;
+
+    fprintf(stderr, ">na_sm_msg_send_unexpected(na_sm_addr->pid=%d na_sm_addr->sm_path=%s buf=%s buf_size=%d tag=%d)\n", na_sm_addr->pid, na_sm_addr->sm_path, (char*) buf,  buf_size, tag);
+
     /* Allocate op_id */
     na_sm_op_id = (na_sm_op_id_t *) calloc(1, sizeof(*na_sm_op_id));
     if (!na_sm_op_id) {
@@ -752,6 +761,30 @@ na_sm_msg_send_unexpected(na_class_t NA_UNUSED *na_class,
     /* Post the SM send request */
     fprintf(stderr, "I will post unexpected send request here.\n");
     int sm_ret = 1;
+
+    pid_t pid = na_sm_addr->pid; 
+
+    int descriptor = -1;    
+    descriptor = shm_open("/mercury_recv_unexpected.shm", O_CREAT | O_RDWR,
+			  S_IRUSR | S_IWUSR);
+    if (descriptor != -1) {
+        ftruncate(descriptor, strlen(buf));
+    }
+    else {
+        NA_LOG_ERROR("shm_open() failed.");
+    }
+
+    // TO-DO: mmap should be done by server and exposed to client.
+    char *result = mmap(NULL, strlen(buf), PROT_WRITE | PROT_READ, mmap_flags,
+                        descriptor, 0);
+
+    local[0].iov_base = buf;
+    local[0].iov_len = strlen(buf);
+
+    remote[0].iov_base = result;
+    remote[0].iov_len = strlen(buf);
+
+    nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
 
     /* If immediate completion, directly add to completion queue */
     if (sm_ret > 0) {
@@ -775,6 +808,14 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
         na_cb_t callback, void *arg, void *buf, na_size_t buf_size,
         na_op_id_t *op_id)
 {
+    int efd = -1;		/* epoll descriptor */
+    int ready = -1;
+    int s = -1;
+    struct epoll_event event;
+    struct epoll_event events[NA_SM_EPOLL_MAX_EVENTS];
+
+    int descriptor = -1;    	/* shared memory descriptor */
+
     na_sm_op_id_t *na_sm_op_id = NULL;
     na_return_t ret = NA_SUCCESS;
     /* Allocate na_op_id */
@@ -788,6 +829,74 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
     na_sm_op_id->callback = callback;
     na_sm_op_id->arg = arg;
     na_sm_op_id->info.recv_unexpected.buf = buf;
+
+    /* Open a shared memory. */
+    descriptor = shm_open("/mercury_recv_unexpected.shm", O_CREAT | O_RDWR,
+			  S_IRUSR | S_IWUSR);
+    if (descriptor != -1) {
+        ftruncate(descriptor, buf_size);
+    }
+    else {
+        NA_LOG_ERROR("shm_open() failed.");
+    }
+
+    int mmap_flags = MAP_SHARED;
+    char *result = mmap(NULL, (size_t) buf_size,
+                        PROT_WRITE | PROT_READ, mmap_flags,
+                        descriptor, 0);
+    /* Publish memory location via pipe. */
+
+
+    if (result == MAP_FAILED) {
+        NA_LOG_ERROR("mmap() failed.");        
+        return NA_PROTOCOL_ERROR;
+    }
+    int not_changed = 1;
+    while(not_changed){
+      /* Check buffer change. */
+      fprintf(stderr, "=na_sm_msg_recv_unexpected():result[0] = %c\n", result[0]);
+      if (result[0] != 0) {
+	fprintf(stderr, "=na_sm_msg_recv_unexpected:result[0] is now %c\n", result[0]);
+	not_changed = 0;
+      }
+    }
+      
+#if 0
+    /* Use epoll to check if something is received. */
+    efd = epoll_create1(0);
+    if (efd == -1)
+      {
+	perror ("epoll_create");
+	abort ();
+      }
+    event.data.fd = descriptor;
+    event.events = EPOLLIN | EPOLLET;
+    s = epoll_ctl(efd, EPOLL_CTL_ADD, descriptor, &event);
+    if (s == -1)
+      {
+	perror ("epoll_ctl");
+	abort ();
+      }
+
+    ret = epoll_wait(efd, events, NA_SM_EPOLL_MAX_EVENTS, 0);
+    if (ret > 0) {
+      int count = ret, i, ret2;
+
+      fprintf(stderr, "%s: epoll_wait() found %d events",
+	    __func__, count);
+      for (i = 0; i < count; i++) {
+	if (events[i].events & EPOLLIN)
+	  {
+	    if  (descriptor == events[i].data.fd){
+	      fprintf(stderr, "got events on shared memory.\n");
+	    }
+	    else {
+	      fprintf(stderr, "got events on fd = %d.\n", events[i].data.fd);
+	    }
+	  }
+      }
+    }
+#endif
 
     /* Push it into queue. */
     hg_thread_mutex_lock(&NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
@@ -855,8 +964,16 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         na_addr_t source, na_tag_t tag, na_op_id_t *op_id)
 {
     struct na_sm_op_id *na_sm_op_id = NULL;        
+    struct na_sm_addr *na_sm_addr = (struct na_sm_addr*) source;
     na_return_t ret = NA_SUCCESS;
     int sm_ret = 0;
+    int descriptor = -1;    
+
+    // This causes segmentation fault error on server.
+    // I think it happens because msg_unexpected_recv_cb did not initialize 
+    //     params->source_addr = callback_info->info.recv_unexpected.source;
+    // in msg_unexpected_recv_cb().
+    // fprintf(stderr, ">na_sm_msg_recv_expected(na_sm_addr->pid=%d na_sm_addr->sm_path=%s buf_size=%d)\n", na_sm_addr->pid, na_sm_addr->sm_path, buf_size);
 
     /* Allocate na_op_id */
     na_sm_op_id = (struct na_sm_op_id *) malloc(sizeof(struct na_sm_op_id));    
@@ -875,7 +992,25 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     na_sm_op_id->canceled = NA_FALSE;
 
     /* Post the SM recv request. */
-    fprintf(stderr, "I will post expected receive request here.\n");
+    // descriptor = shm_open(na_sm_addr->sm_path, O_CREAT | O_RDWR,
+    descriptor = shm_open("/mercury_recv_expected.shm", O_CREAT | O_RDWR,
+			  S_IRUSR | S_IWUSR);
+    if (descriptor != -1) {
+        ftruncate(descriptor, buf_size);
+    }
+    else {
+        NA_LOG_ERROR("shm_open() failed.");
+    }
+
+    int mmap_flags = MAP_SHARED;
+    char *result = mmap(NULL, (size_t) buf_size,
+                        PROT_WRITE | PROT_READ, mmap_flags,
+                        descriptor, 0);
+    if (result == MAP_FAILED) {
+        NA_LOG_ERROR("mmap failed().");        
+        return NA_PROTOCOL_ERROR;
+    }
+
     sm_ret = 1;
 
     /* If immediate completion, directly add to completion queue */
@@ -887,6 +1022,7 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
             return ret;
         }
     }
+
 
     /* Assign op_id */
     // *op_id = (na_op_id_t) na_sm_op_id;
@@ -1288,9 +1424,6 @@ na_sm_progress(na_class_t *na_class, na_context_t *context,
                 ret = NA_PROTOCOL_ERROR;
             
             }
-        }
-        else {
-	  fprintf(stderr, "na_sm_op_id is NULL.\n");
         }
         
         if (ret != NA_SUCCESS) {

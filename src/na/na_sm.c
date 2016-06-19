@@ -852,7 +852,7 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
         return NA_PROTOCOL_ERROR;
     }
     int not_changed = 1;
-    while(not_changed){
+    while (not_changed){
       /* Check buffer change. */
       fprintf(stderr, "=na_sm_msg_recv_unexpected():result[0] = %c\n", result[0]);
       if (result[0] != 0) {
@@ -922,7 +922,13 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         na_addr_t dest, na_tag_t tag, na_op_id_t *op_id)
 {
     struct na_sm_op_id *na_sm_op_id = NULL;    
+    struct na_sm_addr *na_sm_addr = (struct na_sm_addr*) dest;
     na_return_t ret = NA_SUCCESS;
+    struct iovec local[1];
+    struct iovec remote[1];
+    int mmap_flags = MAP_SHARED;        
+    ssize_t nwrite=0;
+
     /* Allocate op_id */
     na_sm_op_id = (na_sm_op_id_t *) calloc(1, sizeof(*na_sm_op_id));
     if (!na_sm_op_id) {
@@ -940,6 +946,31 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     /* Post the SM send request */
     fprintf(stderr, "I will post expected send request here.\n");
     int sm_ret = 1;
+
+    // Seg faul on server.
+    // pid_t pid = na_sm_addr->pid; 
+    pid_t pid = getpid();
+
+    int descriptor = -1;    
+    descriptor = shm_open("/mercury_recv_expected.shm", O_CREAT | O_RDWR,
+			  S_IRUSR | S_IWUSR);
+    if (descriptor != -1) {
+        ftruncate(descriptor, strlen(buf));
+    }
+    else {
+        NA_LOG_ERROR("shm_open() failed.");
+    }
+
+    char *result = mmap(NULL, strlen(buf), PROT_WRITE | PROT_READ, mmap_flags,
+                        descriptor, 0);
+
+    local[0].iov_base = buf;
+    local[0].iov_len = strlen(buf);
+
+    remote[0].iov_base = result;
+    remote[0].iov_len = strlen(buf);
+
+    nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
 
     /* If immediate completion, directly add to completion queue */
     if (sm_ret > 0) {
@@ -1012,7 +1043,18 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     }
 
     sm_ret = 1;
-
+#if 0
+    // You cannot busy wait for receive expected. Both server and client will starve. 
+    int not_changed = 1;
+    while (not_changed){
+      /* Check buffer change. */
+      fprintf(stderr, "=na_sm_msg_recv_expected():result[0] = %x\n", result[0]);
+      if (result[0] != 0) {
+	fprintf(stderr, "=na_sm_msg_recv_expected:result[0] is now %c\n", result[0]);
+	not_changed = 0;
+      }
+    }
+#endif
     /* If immediate completion, directly add to completion queue */
     if (sm_ret > 0) {
         ret = na_sm_complete(na_sm_op_id);
@@ -1290,9 +1332,9 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     remote[0].iov_base = na_sm_mem_handle_remote->base;
     remote[0].iov_len = 100;
     // remote[0].iov_len = na_sm_mem_handle_remote->size;
-#ifdef LINUX    
+    // #ifdef LINUX    
     nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
-#endif    
+    // #endif    
     if (nwrite < 1){
         perror("process_vm_writev()");
     }
@@ -1357,9 +1399,9 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     remote[0].iov_base = na_sm_mem_handle_remote->base;
     remote[0].iov_len = 100;
     // remote[0].iov_len = na_sm_mem_handle_remote->size;
-#ifdef LINUX
+    // #ifdef LINUX
     nread = process_vm_readv(pid, local, 1, remote, 1, 0);
-#endif    
+    // #endif    
     if (nread == 0){
         perror("process_vm_readv()");
     }

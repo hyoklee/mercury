@@ -774,7 +774,7 @@ na_sm_msg_send_unexpected(na_class_t NA_UNUSED *na_class,
         NA_LOG_ERROR("shm_open() failed.");
     }
 
-    // TO-DO: mmap should be done by server and exposed to client.
+    // TO-DO: mmap should be exposed to client through pipe.
     char *result = mmap(NULL, strlen(buf), PROT_WRITE | PROT_READ, mmap_flags,
                         descriptor, 0);
 
@@ -808,6 +808,9 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
         na_cb_t callback, void *arg, void *buf, na_size_t buf_size,
         na_op_id_t *op_id)
 {
+    fprintf(stderr, ">na_sm_msg_recv_unexpected()\n");
+    char *myfifo = "/tmp/mercury_msg_fifo";
+    int fret = -1;
     int efd = -1;		/* epoll descriptor */
     int ready = -1;
     int s = -1;
@@ -818,6 +821,21 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
 
     na_sm_op_id_t *na_sm_op_id = NULL;
     na_return_t ret = NA_SUCCESS;
+
+    fret = mkfifo(myfifo, 0666);
+    if (fret == -1){
+        fprintf(stderr, "mkfifo failed\n");
+        fprintf(stderr, "Error no is : %d\n", errno);
+        fprintf(stderr, "Error description is : %s\n", strerror(errno));     
+    }
+
+    int pipe_descriptor = open(myfifo, O_RDONLY|O_NONBLOCK);
+    if (pipe_descriptor == -1) {
+        fprintf(stderr, "open failed\n");
+        fprintf(stderr, "Error no is : %d\n", errno);
+        fprintf(stderr, "Error description is : %s\n",strerror(errno));     
+    }
+
     /* Allocate na_op_id */
     na_sm_op_id = (na_sm_op_id_t *)calloc(1, sizeof(*na_sm_op_id));
     if(!na_sm_op_id){
@@ -844,13 +862,15 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
     char *result = mmap(NULL, (size_t) buf_size,
                         PROT_WRITE | PROT_READ, mmap_flags,
                         descriptor, 0);
-    /* Publish memory location via pipe. */
 
+    /* Publish memory location via pipe. */
 
     if (result == MAP_FAILED) {
         NA_LOG_ERROR("mmap() failed.");        
         return NA_PROTOCOL_ERROR;
     }
+#if 0
+    /* Busy polling - it works but it is not recommended. */
     int not_changed = 1;
     while (not_changed){
       /* Check buffer change. */
@@ -860,35 +880,44 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
 	not_changed = 0;
       }
     }
-      
-#if 0
+#endif
     /* Use epoll to check if something is received. */
+
+
     efd = epoll_create1(0);
     if (efd == -1)
       {
 	perror ("epoll_create");
 	abort ();
       }
-    event.data.fd = descriptor;
+    /* epoll on shared memory doesn't work. */
+    // event.data.fd = descriptor;
+    event.data.fd = pipe_descriptor;
     event.events = EPOLLIN | EPOLLET;
-    s = epoll_ctl(efd, EPOLL_CTL_ADD, descriptor, &event);
+
+    // s = epoll_ctl(efd, EPOLL_CTL_ADD, descriptor, &event);
+    s = epoll_ctl(efd, EPOLL_CTL_ADD, pipe_descriptor, &event);
     if (s == -1)
       {
 	perror ("epoll_ctl");
 	abort ();
       }
 
-    ret = epoll_wait(efd, events, NA_SM_EPOLL_MAX_EVENTS, 0);
-    if (ret > 0) {
-      int count = ret, i, ret2;
+    int ret2 = 1;
+    while(!na_sm_op_id->completed){
+    ret2 = epoll_wait(efd, events, NA_SM_EPOLL_MAX_EVENTS, -1);
+    if (ret2 > 0) {
+      int i;
+      int count = ret2; // , i, ret2;
 
-      fprintf(stderr, "%s: epoll_wait() found %d events",
+      fprintf(stderr, "%s: epoll_wait() found %d events.\n",
 	    __func__, count);
       for (i = 0; i < count; i++) {
 	if (events[i].events & EPOLLIN)
 	  {
-	    if  (descriptor == events[i].data.fd){
-	      fprintf(stderr, "got events on shared memory.\n");
+	    if  (pipe_descriptor == events[i].data.fd){
+	      fprintf(stderr, "got events on pipe.\n");
+	      na_sm_op_id->completed = NA_TRUE;
 	    }
 	    else {
 	      fprintf(stderr, "got events on fd = %d.\n", events[i].data.fd);
@@ -896,7 +925,15 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
 	  }
       }
     }
-#endif
+    else {
+      fprintf(stderr, "epoll_wait() returned %d \n.", ret2);
+    }
+    // Will epoll wait?
+    fprintf(stderr, "comes here after epoll()\n");
+
+    close(pipe_descriptor);    
+  } // while(not completed)
+// unlink(myfifo);
 
     /* Push it into queue. */
     hg_thread_mutex_lock(&NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
@@ -949,9 +986,15 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
 
     // Seg faul on server.
     // pid_t pid = na_sm_addr->pid; 
+
+#if 0
+    // pid should be server's pid.
+    // Test locally for a moment.
     pid_t pid = getpid();
 
-    int descriptor = -1;    
+    int descriptor = -1;
+
+    /* Write message to server's recv_expected. */
     descriptor = shm_open("/mercury_recv_expected.shm", O_CREAT | O_RDWR,
 			  S_IRUSR | S_IWUSR);
     if (descriptor != -1) {
@@ -971,7 +1014,7 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     remote[0].iov_len = strlen(buf);
 
     nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
-
+#endif
     /* If immediate completion, directly add to completion queue */
     if (sm_ret > 0) {
         ret = na_sm_complete(na_sm_op_id);
@@ -1043,6 +1086,9 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     }
 
     sm_ret = 1;
+
+
+
 #if 0
     // You cannot busy wait for receive expected. Both server and client will starve. 
     int not_changed = 1;
@@ -1055,6 +1101,7 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
       }
     }
 #endif
+
     /* If immediate completion, directly add to completion queue */
     if (sm_ret > 0) {
         ret = na_sm_complete(na_sm_op_id);
@@ -1459,6 +1506,7 @@ na_sm_progress(na_class_t *na_class, na_context_t *context,
                 NA_LOG_ERROR("Should not complete lookup here");
                 break;
             case NA_CB_RECV_UNEXPECTED:
+	      
                 ret = na_sm_complete(na_sm_op_id);
                 break;
             default:
@@ -1521,6 +1569,7 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
         NA_LOG_ERROR("Got NA_CB_SEND_EXPECTED.");
         break;
     case NA_CB_RECV_UNEXPECTED:
+        // For testing
         callback_info->info.recv_unexpected.source = 22222;
 	callback_info->info.recv_unexpected.actual_buf_size = 0;
 	callback_info->info.recv_unexpected.tag = 3;

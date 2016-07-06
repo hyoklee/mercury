@@ -786,6 +786,14 @@ na_sm_msg_send_unexpected(na_class_t NA_UNUSED *na_class,
 
     nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
 
+    /* Notify it via pipe. */
+    char *myfifo = "/tmp/mercury_unexpected_msg_fifo";
+    int client_to_server = open(myfifo, O_WRONLY);
+    char str[BUFSIZ];
+    sprintf(str, "wakeup");
+    write(client_to_server, str, sizeof(str));    
+    close(client_to_server);    
+
     /* If immediate completion, directly add to completion queue */
     if (sm_ret > 0) {
         ret = na_sm_complete(na_sm_op_id);
@@ -809,10 +817,9 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
         na_op_id_t *op_id)
 {
     fprintf(stderr, ">na_sm_msg_recv_unexpected()\n");
-    char *myfifo = "/tmp/mercury_msg_fifo";
+    char *myfifo = "/tmp/mercury_unexpected_msg_fifo";
     int fret = -1;
     int efd = -1;		/* epoll descriptor */
-    int ready = -1;
     int s = -1;
     struct epoll_event event;
     struct epoll_event events[NA_SM_EPOLL_MAX_EVENTS];
@@ -1015,6 +1022,15 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
 
     nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
 #endif
+    /* Signal to pipe. */
+    char *myfifo = "/tmp/mercury_expected_msg_fifo";
+    int client_to_server = open(myfifo, O_WRONLY);
+    char str[BUFSIZ];
+    sprintf(str, "wakeup");
+    write(client_to_server, str, sizeof(str));    
+    close(client_to_server);    
+    
+
     /* If immediate completion, directly add to completion queue */
     if (sm_ret > 0) {
         ret = na_sm_complete(na_sm_op_id);
@@ -1042,12 +1058,7 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     na_return_t ret = NA_SUCCESS;
     int sm_ret = 0;
     int descriptor = -1;    
-
-    // This causes segmentation fault error on server.
-    // I think it happens because msg_unexpected_recv_cb did not initialize 
-    //     params->source_addr = callback_info->info.recv_unexpected.source;
-    // in msg_unexpected_recv_cb().
-    // fprintf(stderr, ">na_sm_msg_recv_expected(na_sm_addr->pid=%d na_sm_addr->sm_path=%s buf_size=%d)\n", na_sm_addr->pid, na_sm_addr->sm_path, buf_size);
+    char *myfifo = "/tmp/mercury_expected_msg_fifo";
 
     /* Allocate na_op_id */
     na_sm_op_id = (struct na_sm_op_id *) malloc(sizeof(struct na_sm_op_id));    
@@ -1065,7 +1076,7 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     na_sm_op_id->info.recv_expected.actual_size = 0;
     na_sm_op_id->canceled = NA_FALSE;
 
-    /* Post the SM recv request. */
+    /* Prepare shared memory for expected message. */
     // descriptor = shm_open(na_sm_addr->sm_path, O_CREAT | O_RDWR,
     descriptor = shm_open("/mercury_recv_expected.shm", O_CREAT | O_RDWR,
 			  S_IRUSR | S_IWUSR);
@@ -1084,6 +1095,82 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         NA_LOG_ERROR("mmap failed().");        
         return NA_PROTOCOL_ERROR;
     }
+
+    /* Create pipe that can signal something is sent from client. */
+    int fret = mkfifo(myfifo, 0666);
+    if (fret == -1){
+        fprintf(stderr, "mkfifo failed\n");
+        fprintf(stderr, "Error no is : %d\n", errno);
+        fprintf(stderr, "Error description is : %s\n", strerror(errno));     
+    }
+    int pipe_descriptor = open(myfifo, O_RDONLY|O_NONBLOCK);
+    if (pipe_descriptor == -1) {
+        fprintf(stderr, "open failed\n");
+        fprintf(stderr, "Error no is : %d\n", errno);
+        fprintf(stderr, "Error description is : %s\n",strerror(errno));     
+    }
+    /* Monitor event on pipe */
+    struct epoll_event event;
+    struct epoll_event events[NA_SM_EPOLL_MAX_EVENTS];
+    int s = -1;
+    int efd = epoll_create1(0);
+    if (efd == -1)
+      {
+	perror ("epoll_create");
+	abort ();
+      }
+    /* epoll on shared memory doesn't work. */
+    // event.data.fd = descriptor;
+    event.data.fd = pipe_descriptor;
+    event.events = EPOLLIN | EPOLLET;
+
+    // s = epoll_ctl(efd, EPOLL_CTL_ADD, descriptor, &event);
+    s = epoll_ctl(efd, EPOLL_CTL_ADD, pipe_descriptor, &event);
+    if (s == -1)
+      {
+	perror ("epoll_ctl");
+	abort ();
+      }
+
+    int ret2 = 1;
+
+    while(!na_sm_op_id->completed){
+
+      ret2 = epoll_wait(efd, events, NA_SM_EPOLL_MAX_EVENTS, 100);
+      if (ret2 > 0) {
+	int i;
+	int count = ret2; // , i, ret2;
+
+	fprintf(stderr, "%s: epoll_wait() found %d events.\n",
+		__func__, count);
+	for (i = 0; i < count; i++) {
+	  if (events[i].events & EPOLLIN)
+	    {
+	      if  (pipe_descriptor == events[i].data.fd){
+		fprintf(stderr, "got events on pipe.\n");
+		na_sm_op_id->completed = NA_TRUE;
+		close(pipe_descriptor);    
+	      }
+	      else {
+		fprintf(stderr, "got events on fd = %d.\n", events[i].data.fd);
+	      }
+	    }
+	}
+      }
+      else {
+	fprintf(stderr, "epoll_wait() returned %d \n.", ret2);
+      }
+      // Will epoll wait?
+      fprintf(stderr, "comes here after epoll()\n");
+    } // while(not completed)
+
+    // This causes segmentation fault error on server.
+    // I think it happens because msg_unexpected_recv_cb did not initialize 
+    //     params->source_addr = callback_info->info.recv_unexpected.source;
+    // in msg_unexpected_recv_cb().
+    // fprintf(stderr, ">na_sm_msg_recv_expected(na_sm_addr->pid=%d na_sm_addr->sm_path=%s buf_size=%d)\n", na_sm_addr->pid, na_sm_addr->sm_path, buf_size);
+
+
 
     sm_ret = 1;
 

@@ -381,6 +381,12 @@ na_sm_get(
 
 /* progress */
 static na_return_t
+na_sm_progress_expected(
+        na_class_t   *na_class,
+        na_sm_op_id_t *op_id
+        );
+
+static na_return_t
 na_sm_progress(
         na_class_t   *na_class,
         na_context_t *context,
@@ -831,7 +837,7 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
 
     fret = mkfifo(myfifo, 0666);
     if (fret == -1){
-        fprintf(stderr, "mkfifo failed\n");
+      fprintf(stderr, "mkfifo failed for %s\n", myfifo);
         fprintf(stderr, "Error no is : %d\n", errno);
         fprintf(stderr, "Error description is : %s\n", strerror(errno));     
     }
@@ -1024,10 +1030,17 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
 #endif
     /* Signal to pipe. */
     char *myfifo = "/tmp/mercury_expected_msg_fifo";
-    int client_to_server = open(myfifo, O_WRONLY);
+    int client_to_server = open(myfifo, O_WRONLY|O_NONBLOCK);
     char str[BUFSIZ];
     sprintf(str, "wakeup");
-    write(client_to_server, str, sizeof(str));    
+    ssize_t size = write(client_to_server, str, sizeof(str));    
+    if (size < 0){
+	fprintf(stderr, "write failed for %s\n", myfifo);
+        fprintf(stderr, "Error no is : %d\n", errno);
+        fprintf(stderr, "Error description is : %s\n", strerror(errno));     
+      }
+
+
     close(client_to_server);    
     
 
@@ -1053,6 +1066,7 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         na_cb_t callback, void *arg, void *buf, na_size_t buf_size,
         na_addr_t source, na_tag_t tag, na_op_id_t *op_id)
 {
+  struct stat sb;
     struct na_sm_op_id *na_sm_op_id = NULL;        
     struct na_sm_addr *na_sm_addr = (struct na_sm_addr*) source;
     na_return_t ret = NA_SUCCESS;
@@ -1095,86 +1109,22 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         NA_LOG_ERROR("mmap failed().");        
         return NA_PROTOCOL_ERROR;
     }
-
-    /* Create pipe that can signal something is sent from client. */
-    int fret = mkfifo(myfifo, 0666);
-    if (fret == -1){
-        fprintf(stderr, "mkfifo failed\n");
+    if (stat(myfifo, &sb) == -1) {
+      /* Create pipe that can signal something is sent from client. */
+      int fret = mkfifo(myfifo, 0666);
+      if (fret == -1){
+	fprintf(stderr, "mkfifo failed for %s\n", myfifo);
         fprintf(stderr, "Error no is : %d\n", errno);
         fprintf(stderr, "Error description is : %s\n", strerror(errno));     
+      }
     }
-    int pipe_descriptor = open(myfifo, O_RDONLY|O_NONBLOCK);
-    if (pipe_descriptor == -1) {
-        fprintf(stderr, "open failed\n");
-        fprintf(stderr, "Error no is : %d\n", errno);
-        fprintf(stderr, "Error description is : %s\n",strerror(errno));     
-    }
-    /* Monitor event on pipe */
-    struct epoll_event event;
-    struct epoll_event events[NA_SM_EPOLL_MAX_EVENTS];
-    int s = -1;
-    int efd = epoll_create1(0);
-    if (efd == -1)
-      {
-	perror ("epoll_create");
-	abort ();
-      }
-    /* epoll on shared memory doesn't work. */
-    // event.data.fd = descriptor;
-    event.data.fd = pipe_descriptor;
-    event.events = EPOLLIN | EPOLLET;
-
-    // s = epoll_ctl(efd, EPOLL_CTL_ADD, descriptor, &event);
-    s = epoll_ctl(efd, EPOLL_CTL_ADD, pipe_descriptor, &event);
-    if (s == -1)
-      {
-	perror ("epoll_ctl");
-	abort ();
-      }
-
-    int ret2 = 1;
-
-    while(!na_sm_op_id->completed){
-
-      ret2 = epoll_wait(efd, events, NA_SM_EPOLL_MAX_EVENTS, 100);
-      if (ret2 > 0) {
-	int i;
-	int count = ret2; // , i, ret2;
-
-	fprintf(stderr, "%s: epoll_wait() found %d events.\n",
-		__func__, count);
-	for (i = 0; i < count; i++) {
-	  if (events[i].events & EPOLLIN)
-	    {
-	      if  (pipe_descriptor == events[i].data.fd){
-		fprintf(stderr, "got events on pipe.\n");
-		na_sm_op_id->completed = NA_TRUE;
-		close(pipe_descriptor);    
-	      }
-	      else {
-		fprintf(stderr, "got events on fd = %d.\n", events[i].data.fd);
-	      }
-	    }
-	}
-      }
-      else {
-	fprintf(stderr, "epoll_wait() returned %d \n.", ret2);
-      }
-      // Will epoll wait?
-      fprintf(stderr, "comes here after epoll()\n");
-    } // while(not completed)
 
     // This causes segmentation fault error on server.
     // I think it happens because msg_unexpected_recv_cb did not initialize 
     //     params->source_addr = callback_info->info.recv_unexpected.source;
     // in msg_unexpected_recv_cb().
     // fprintf(stderr, ">na_sm_msg_recv_expected(na_sm_addr->pid=%d na_sm_addr->sm_path=%s buf_size=%d)\n", na_sm_addr->pid, na_sm_addr->sm_path, buf_size);
-
-
-
     sm_ret = 1;
-
-
 
 #if 0
     // You cannot busy wait for receive expected. Both server and client will starve. 
@@ -1187,7 +1137,7 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
 	not_changed = 0;
       }
     }
-#endif
+
 
     /* If immediate completion, directly add to completion queue */
     if (sm_ret > 0) {
@@ -1198,7 +1148,17 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
             return ret;
         }
     }
+#endif
+    hg_thread_mutex_lock(&NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
 
+    if (hg_queue_push_head(NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue,
+            (hg_queue_value_t) na_sm_op_id) != HG_UTIL_SUCCESS) {
+        NA_LOG_ERROR("Could not push ID to unexpected op queue");
+        ret = NA_NOMEM_ERROR;
+    }
+
+    hg_thread_mutex_unlock(
+            &NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
 
     /* Assign op_id */
     // *op_id = (na_op_id_t) na_sm_op_id;
@@ -1284,7 +1244,7 @@ na_sm_mem_publish(na_class_t *na_class, na_mem_handle_t mem_handle)
     /* Create named pipe. */
     char *myfifo = "/tmp/mercury_fifo";
     char str[BUFSIZ];
-    int client_to_server = open(myfifo, O_WRONLY);
+    int client_to_server = open(myfifo, O_WRONLY|O_NONBLOCK);
     pid_t pid = getpid();
     fprintf(stderr, "my pid = %d\n", pid);
     if (client_to_server == -1) {
@@ -1384,7 +1344,7 @@ na_sm_mem_handle_deserialize(na_class_t NA_UNUSED *na_class,
 
     fret = mkfifo(myfifo, 0666);
     if (fret == -1){
-        fprintf(stderr, "mkfifo failed\n");
+      fprintf(stderr, "mkfifo failed for %s\n", myfifo);
         fprintf(stderr, "Error no is : %d\n", errno);
         fprintf(stderr, "Error description is : %s\n", strerror(errno));     
     }
@@ -1562,6 +1522,86 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     return ret;
 }
 
+static na_return_t
+na_sm_progress_expected(na_class_t *na_class, struct na_sm_op_id *na_sm_op_id)
+{
+
+    
+    na_return_t ret = NA_SUCCESS;
+    char *myfifo = "/tmp/mercury_expected_msg_fifo";
+
+    fprintf(stderr, ">na_sm_progress_expected()\n");
+    int pipe_descriptor = open(myfifo, O_RDONLY|O_NONBLOCK);
+    if (pipe_descriptor == -1) {
+        fprintf(stderr, "open failed\n");
+        fprintf(stderr, "Error no is : %d\n", errno);
+        fprintf(stderr, "Error description is : %s\n",strerror(errno));     
+    }
+    /* Monitor event on pipe */
+    struct epoll_event event;
+    struct epoll_event events[NA_SM_EPOLL_MAX_EVENTS];
+    int s = -1;
+    int efd = epoll_create1(0);
+    if (efd == -1)
+      {
+	perror ("epoll_create");
+	abort ();
+      }
+    /* epoll on shared memory doesn't work. */
+    // event.data.fd = descriptor;
+    event.data.fd = pipe_descriptor;
+    event.events = EPOLLIN | EPOLLET;
+
+    // s = epoll_ctl(efd, EPOLL_CTL_ADD, descriptor, &event);
+    s = epoll_ctl(efd, EPOLL_CTL_ADD, pipe_descriptor, &event);
+    if (s == -1)
+      {
+	perror ("epoll_ctl");
+	abort ();
+      }
+
+    int ret2 = 1;
+    
+    ret2 = epoll_wait(efd, events, NA_SM_EPOLL_MAX_EVENTS, 100);
+      if (ret2 > 0) {
+	int i;
+	int count = ret2; // , i, ret2;
+
+	fprintf(stderr, "%s: epoll_wait() found %d events.\n",
+		__func__, count);
+	for (i = 0; i < count; i++) {
+	  if (events[i].events & EPOLLIN)
+	    {
+	      if  (pipe_descriptor == events[i].data.fd){
+		fprintf(stderr, "got events on pipe.\n");
+		na_sm_complete(na_sm_op_id);
+		close(pipe_descriptor);
+		return NA_SUCCESS;
+	      }
+	      else {
+		fprintf(stderr, "got events on fd = %d.\n", events[i].data.fd);
+	      }
+	    }
+	}
+      }
+      else {
+	fprintf(stderr, "epoll_wait() returned %d \n", ret2);
+	hg_thread_mutex_lock(&NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
+
+	if (hg_queue_push_head(NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue,
+			       (hg_queue_value_t) na_sm_op_id) != HG_UTIL_SUCCESS) {
+	  NA_LOG_ERROR("Could not push ID to unexpected op queue");
+	  ret = NA_NOMEM_ERROR;
+	}
+
+	hg_thread_mutex_unlock(
+			       &NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
+
+      }
+      fprintf(stderr, "comes here after epoll()\n");
+      ret = NA_TIMEOUT;
+}
+
 /*---------------------------------------------------------------------------*/
 static na_return_t
 na_sm_progress(na_class_t *na_class, na_context_t *context,
@@ -1573,7 +1613,7 @@ na_sm_progress(na_class_t *na_class, na_context_t *context,
     /* Convert timeout in ms into seconds. */    
     double remaining = timeout / 1000.0;
 			
-    // fprintf(stderr, "na_sm_progress()\n");
+    // fprintf(stderr, ">na_sm_progress()\n");
     do {
         hg_time_t	t1, t2;
         hg_queue_value_t queue_value;
@@ -1593,8 +1633,10 @@ na_sm_progress(na_class_t *na_class, na_context_t *context,
                 NA_LOG_ERROR("Should not complete lookup here");
                 break;
             case NA_CB_RECV_UNEXPECTED:
-	      
                 ret = na_sm_complete(na_sm_op_id);
+                break;
+            case NA_CB_RECV_EXPECTED: 	      // Use unexpected Q Temporarily
+	        ret = na_sm_progress_expected(na_class, na_sm_op_id);
                 break;
             default:
                 NA_LOG_ERROR("Unknown type of operation ID");

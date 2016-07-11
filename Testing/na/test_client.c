@@ -100,7 +100,7 @@ ack_expected_recv_cb(const struct na_cb_info *callback_info)
     }
     if (!error) printf("Successfully reset %zu bytes!\n",
             params->bulk_size * sizeof(int));
-    while(1);
+    // while(1);
 
     ret = NA_Mem_deregister(params->na_class, params->local_mem_handle);
     if (ret != NA_SUCCESS) {

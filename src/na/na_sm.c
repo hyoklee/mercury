@@ -85,6 +85,8 @@ struct na_sm_info_send_unexpected {
 
 struct na_sm_info_recv_unexpected {
     void *buf;
+    size_t buf_size;
+    pid_t pid;             /* remote process id */
 };
 
 struct na_sm_info_send_expected {
@@ -464,6 +466,7 @@ static na_bool_t
 na_sm_check_protocol(const char *protocol_name)
 {
     na_bool_t accept = NA_FALSE;
+    fprintf(stderr, "%s\n", protocol_name);
     if (!strncmp("sm", protocol_name, 2)){
         accept = NA_TRUE;
     }
@@ -482,7 +485,7 @@ na_sm_initialize(na_class_t * na_class, const struct na_info *na_info,
 
     int descriptor = -1;
     int size = 1024 * 1024 * 256; // 256 mb
-    fprintf(stderr, ">na_sm_initialize()\n");    
+    fprintf(stderr, ">na_sm_initialize(%d)\n", na_info->port);    
 
     descriptor = shm_open(SHM_FILE, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
     if (descriptor != -1) {
@@ -585,8 +588,12 @@ na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
     struct na_sm_op_id *na_sm_op_id = NULL;
     na_return_t ret = NA_SUCCESS;
     na_sm_addr_t *na_sm_addr = NULL;
+    char *_port = NULL;
+    char *token  = NULL;
+    token = strtok_r(name, ":", &_port);
+    token = strtok_r(NULL, ":", &_port);
 
-    fprintf(stderr, ">na_sm_addr_lookup(name=%s)\n", name);    
+    fprintf(stderr, ">na_sm_addr_lookup(name=%s, port=%s)\n", name, _port);    
 
     /* Allocate op_id */
     na_sm_op_id = (na_sm_op_id_t *) calloc(1, sizeof(*na_sm_op_id));
@@ -618,7 +625,7 @@ na_sm_addr_lookup(na_class_t NA_UNUSED *na_class, na_context_t *context,
         return NA_NOMEM_ERROR;
     }
     na_sm_addr->unexpected = NA_FALSE;
-    na_sm_addr->pid = getpid();
+    na_sm_addr->pid = atoi(_port);
     na_sm_addr->self = NA_FALSE;
     na_sm_op_id->info.lookup.addr = (na_addr_t) na_sm_addr;
     ret = na_sm_complete(na_sm_op_id);
@@ -648,7 +655,8 @@ na_sm_addr_self(na_class_t NA_UNUSED *na_class, na_addr_t *addr)
         NA_LOG_ERROR("Could not allocate SM addr");
         return NA_NOMEM_ERROR;
     }
-    na_sm_addr->pid = 0;
+    // na_sm_addr->pid = 0;
+    na_sm_addr->pid = getpid();
     na_sm_addr->sm_path = NULL;
     na_sm_addr->unexpected = NA_FALSE;
     na_sm_addr->self = NA_TRUE;
@@ -793,14 +801,17 @@ na_sm_msg_send_unexpected(na_class_t NA_UNUSED *na_class,
     nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
 
     /* Notify it via pipe. */
-    char *myfifo = "/tmp/mercury_unexpected_msg_fifo";
+    char myfifo[128];
+    sprintf(myfifo, "/tmp/mumfifo%d", na_sm_addr->pid); 
     int client_to_server = open(myfifo, O_WRONLY);
     char str[BUFSIZ];
-    sprintf(str, "wakeup");
+
+    /* Send pid of source to target. */
+    sprintf(str, "%d", getpid());
     write(client_to_server, str, sizeof(str));    
     close(client_to_server);    
 
-    /* If immediate completion, directly add to completion queue */
+    /* If immediate completion, add directly to completion queue. */
     if (sm_ret > 0) {
         ret = na_sm_complete(na_sm_op_id);
         if (ret != NA_SUCCESS) {
@@ -823,7 +834,10 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
         na_op_id_t *op_id)
 {
     fprintf(stderr, ">na_sm_msg_recv_unexpected()\n");
-    char *myfifo = "/tmp/mercury_unexpected_msg_fifo";
+    struct stat sb;
+    char myfifo[128];
+    char fifobuf[BUFSIZ];
+    sprintf(myfifo, "/tmp/mumfifo%d", getpid()); 
     int fret = -1;
     int efd = -1;		/* epoll descriptor */
     int s = -1;
@@ -834,12 +848,13 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
 
     na_sm_op_id_t *na_sm_op_id = NULL;
     na_return_t ret = NA_SUCCESS;
-
-    fret = mkfifo(myfifo, 0666);
-    if (fret == -1){
-      fprintf(stderr, "mkfifo failed for %s\n", myfifo);
+    if (stat(myfifo, &sb) == -1) {
+      fret = mkfifo(myfifo, 0666);
+      if (fret == -1){
+        fprintf(stderr, "mkfifo failed for %s\n", myfifo);
         fprintf(stderr, "Error no is : %d\n", errno);
         fprintf(stderr, "Error description is : %s\n", strerror(errno));     
+      }
     }
 
     int pipe_descriptor = open(myfifo, O_RDONLY|O_NONBLOCK);
@@ -860,6 +875,7 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
     na_sm_op_id->callback = callback;
     na_sm_op_id->arg = arg;
     na_sm_op_id->info.recv_unexpected.buf = buf;
+    na_sm_op_id->info.recv_unexpected.buf_size = (size_t) buf_size;
 
     /* Open a shared memory. */
     descriptor = shm_open("/mercury_recv_unexpected.shm", O_CREAT | O_RDWR,
@@ -930,6 +946,9 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
 	  {
 	    if  (pipe_descriptor == events[i].data.fd){
 	      fprintf(stderr, "got events on pipe.\n");
+              read(pipe_descriptor, fifobuf, BUFSIZ);
+              fprintf(stderr, "read %s from pipe.\n", fifobuf);
+              na_sm_op_id->info.recv_unexpected.pid = atoi(fifobuf);
 	      na_sm_op_id->completed = NA_TRUE;
 	    }
 	    else {
@@ -979,6 +998,8 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     int mmap_flags = MAP_SHARED;        
     ssize_t nwrite=0;
 
+    fprintf(stderr, ">na_sm_msg_send_expected(tag=%d, dest->addr=%d)\n", 
+	    tag, na_sm_addr->pid);
     /* Allocate op_id */
     na_sm_op_id = (na_sm_op_id_t *) calloc(1, sizeof(*na_sm_op_id));
     if (!na_sm_op_id) {
@@ -1029,8 +1050,11 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
 #endif
     /* Signal to pipe. */
-    char *myfifo = "/tmp/mercury_expected_msg_fifo";
-    int client_to_server = open(myfifo, O_WRONLY|O_NONBLOCK);
+    char myfifo[128];
+    // sprintf(myfifo, "/tmp/memfifo%d", getpid()); 
+    sprintf(myfifo, "/tmp/memfifo%d", na_sm_addr->pid); 
+
+    int client_to_server = open(myfifo, O_WRONLY);
     char str[BUFSIZ];
     sprintf(str, "wakeup");
     ssize_t size = write(client_to_server, str, sizeof(str));    
@@ -1039,8 +1063,6 @@ na_sm_msg_send_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         fprintf(stderr, "Error no is : %d\n", errno);
         fprintf(stderr, "Error description is : %s\n", strerror(errno));     
       }
-
-
     close(client_to_server);    
     
 
@@ -1066,14 +1088,19 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         na_cb_t callback, void *arg, void *buf, na_size_t buf_size,
         na_addr_t source, na_tag_t tag, na_op_id_t *op_id)
 {
-  struct stat sb;
+    struct stat sb;
     struct na_sm_op_id *na_sm_op_id = NULL;        
     struct na_sm_addr *na_sm_addr = (struct na_sm_addr*) source;
     na_return_t ret = NA_SUCCESS;
     int sm_ret = 0;
     int descriptor = -1;    
-    char *myfifo = "/tmp/mercury_expected_msg_fifo";
+    // char *myfifo = "/tmp/mercury_expected_msg_fifo";
 
+    // This causes segmentation fault error on server.
+    // I think it happens because msg_unexpected_recv_cb did not initialize 
+    //     params->source_addr = callback_info->info.recv_unexpected.source;
+    // in msg_unexpected_recv_cb().
+    fprintf(stderr, ">na_sm_msg_recv_expected(na_sm_addr->pid=%d na_sm_addr->sm_path=%s buf_size=%d)\n", na_sm_addr->pid, na_sm_addr->sm_path, buf_size);
     /* Allocate na_op_id */
     na_sm_op_id = (struct na_sm_op_id *) malloc(sizeof(struct na_sm_op_id));    
     if (!na_sm_op_id) {
@@ -1109,6 +1136,9 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         NA_LOG_ERROR("mmap failed().");        
         return NA_PROTOCOL_ERROR;
     }
+    char myfifo[128];
+    sprintf(myfifo, "/tmp/memfifo%d", getpid()); 
+
     if (stat(myfifo, &sb) == -1) {
       /* Create pipe that can signal something is sent from client. */
       int fret = mkfifo(myfifo, 0666);
@@ -1119,36 +1149,9 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
       }
     }
 
-    // This causes segmentation fault error on server.
-    // I think it happens because msg_unexpected_recv_cb did not initialize 
-    //     params->source_addr = callback_info->info.recv_unexpected.source;
-    // in msg_unexpected_recv_cb().
-    // fprintf(stderr, ">na_sm_msg_recv_expected(na_sm_addr->pid=%d na_sm_addr->sm_path=%s buf_size=%d)\n", na_sm_addr->pid, na_sm_addr->sm_path, buf_size);
+    
     sm_ret = 1;
 
-#if 0
-    // You cannot busy wait for receive expected. Both server and client will starve. 
-    int not_changed = 1;
-    while (not_changed){
-      /* Check buffer change. */
-      fprintf(stderr, "=na_sm_msg_recv_expected():result[0] = %x\n", result[0]);
-      if (result[0] != 0) {
-	fprintf(stderr, "=na_sm_msg_recv_expected:result[0] is now %c\n", result[0]);
-	not_changed = 0;
-      }
-    }
-
-
-    /* If immediate completion, directly add to completion queue */
-    if (sm_ret > 0) {
-        ret = na_sm_complete(na_sm_op_id);
-        if (ret != NA_SUCCESS) {
-            NA_LOG_ERROR("Could not complete operation");
-            free(na_sm_op_id);
-            return ret;
-        }
-    }
-#endif
     hg_thread_mutex_lock(&NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
 
     if (hg_queue_push_head(NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue,
@@ -1240,25 +1243,47 @@ static na_return_t
 na_sm_mem_publish(na_class_t *na_class, na_mem_handle_t mem_handle)
 {
     na_sm_mem_handle_t *na_sm_mem_handle = mem_handle;    
-    fprintf(stderr, ">na_sm_mem_publish():%zd\n", na_sm_mem_handle->base);
-    /* Create named pipe. */
+    fprintf(stderr, ">na_sm_mem_publish(mem_handle->base=%zd):\n", na_sm_mem_handle->base);
     char *myfifo = "/tmp/mercury_fifo";
     char str[BUFSIZ];
-    int client_to_server = open(myfifo, O_WRONLY|O_NONBLOCK);
     pid_t pid = getpid();
     fprintf(stderr, "my pid = %d\n", pid);
-    if (client_to_server == -1) {
+    sprintf(str, "%d,%zd,%d", pid, na_sm_mem_handle->base,
+            na_sm_mem_handle->size);
+    FILE *fp;
+    fp = fopen(myfifo, "w+");
+    fputs(str, fp);
+    fclose(fp);
+
+#if 0
+    fret = mkfifo(myfifo, 0777);
+    if (fret == -1){
+      fprintf(stderr, "mkfifo failed for %s\n", myfifo);
+        fprintf(stderr, "Error no is : %d\n", errno);
+        fprintf(stderr, "Error description is : %s\n", strerror(errno));     
+    }
+
+    int client_to_server = -1;
+
+    //    while(client_to_server == -1) {
+    // client_to_server = open(myfifo, O_WRONLY|O_NONBLOCK);
+    client_to_server = open(myfifo, O_WRONLY);
+      if (client_to_server == -1) {
         fprintf(stderr, "open failed\n");
         fprintf(stderr, "Error no is : %d\n", errno);
         fprintf(stderr, "Error description is : %s\n",strerror(errno));     
-    }
-    sprintf(str, "%d,%zd,%d", pid, na_sm_mem_handle->base,
-            na_sm_mem_handle->size);
-    write(client_to_server, str, sizeof(str));    
-    sprintf(str, "exit");
-    write(client_to_server, str, sizeof(str));
+      }
+      else {
+        sprintf(str, "%d,%zd,%d", pid, na_sm_mem_handle->base,
+                na_sm_mem_handle->size);
+        write(client_to_server, str, sizeof(str));    
+        sprintf(str, "exit");
+        write(client_to_server, str, sizeof(str));
+        close(client_to_server);    
+      }
+      //    }
+#endif
 
-    close(client_to_server);    
     return NA_SUCCESS;
 }
 
@@ -1341,13 +1366,14 @@ na_sm_mem_handle_deserialize(na_class_t NA_UNUSED *na_class,
     /* Copy struct */
     memcpy(na_sm_mem_handle, buf, sizeof(struct na_sm_mem_handle));
 
-
+#if 0
     fret = mkfifo(myfifo, 0666);
     if (fret == -1){
       fprintf(stderr, "mkfifo failed for %s\n", myfifo);
         fprintf(stderr, "Error no is : %d\n", errno);
         fprintf(stderr, "Error description is : %s\n", strerror(errno));     
     }
+
 
    client_to_server = open(myfifo, O_RDONLY);    
    while (1)
@@ -1371,6 +1397,15 @@ na_sm_mem_handle_deserialize(na_class_t NA_UNUSED *na_class,
         }
    close(client_to_server);
    unlink(myfifo);
+#endif
+   FILE *fp;
+   char buff[255];
+
+   fp = fopen(myfifo, "r");
+   fgets(handle_info_buf, BUFSIZ, (FILE*)fp);
+   fclose(fp);
+   unlink(myfifo);
+
    char *brkt = NULL;
    brkt = strtok(handle_info_buf, ",");
    na_sm_mem_handle->pid = atoi(brkt);
@@ -1528,7 +1563,10 @@ na_sm_progress_expected(na_class_t *na_class, struct na_sm_op_id *na_sm_op_id)
 
     
     na_return_t ret = NA_SUCCESS;
-    char *myfifo = "/tmp/mercury_expected_msg_fifo";
+    // char *myfifo = "/tmp/mercury_expected_msg_fifo";
+    char myfifo[128];
+    char fifobuf[BUFSIZ];
+    sprintf(myfifo, "/tmp/memfifo%d", getpid()); 
 
     fprintf(stderr, ">na_sm_progress_expected()\n");
     int pipe_descriptor = open(myfifo, O_RDONLY|O_NONBLOCK);
@@ -1562,7 +1600,7 @@ na_sm_progress_expected(na_class_t *na_class, struct na_sm_op_id *na_sm_op_id)
 
     int ret2 = 1;
     
-    ret2 = epoll_wait(efd, events, NA_SM_EPOLL_MAX_EVENTS, 100);
+    ret2 = epoll_wait(efd, events, NA_SM_EPOLL_MAX_EVENTS, -1);
       if (ret2 > 0) {
 	int i;
 	int count = ret2; // , i, ret2;
@@ -1574,7 +1612,9 @@ na_sm_progress_expected(na_class_t *na_class, struct na_sm_op_id *na_sm_op_id)
 	    {
 	      if  (pipe_descriptor == events[i].data.fd){
 		fprintf(stderr, "got events on pipe.\n");
-		na_sm_complete(na_sm_op_id);
+                read(pipe_descriptor, fifobuf, BUFSIZ);
+                fprintf(stderr, "read %s from pipe.\n", fifobuf);
+                na_sm_complete(na_sm_op_id);
 		close(pipe_descriptor);
 		return NA_SUCCESS;
 	      }
@@ -1598,6 +1638,7 @@ na_sm_progress_expected(na_class_t *na_class, struct na_sm_op_id *na_sm_op_id)
 			       &NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
 
       }
+      close(pipe_descriptor);
       fprintf(stderr, "comes here after epoll()\n");
       ret = NA_TIMEOUT;
 }
@@ -1666,6 +1707,7 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
 {
 
     struct na_cb_info *callback_info = NULL;    
+    na_sm_addr_t *na_sm_addr = NULL;
     na_return_t ret = NA_SUCCESS;
 
     if (na_sm_op_id == NULL){
@@ -1698,8 +1740,21 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
         NA_LOG_ERROR("Got NA_CB_SEND_EXPECTED.");
         break;
     case NA_CB_RECV_UNEXPECTED:
-        // For testing
-        callback_info->info.recv_unexpected.source = 22222;
+        /* Allocate addr */
+        na_sm_addr = (struct na_sm_addr *) malloc(
+                                                  sizeof(struct na_sm_addr));
+        if (!na_sm_addr) {
+          NA_LOG_ERROR("Could not allocate SM addr");
+          ret = NA_NOMEM_ERROR;
+          free(callback_info);
+          return ret;
+        }
+        
+        na_sm_addr->unexpected = NA_TRUE;
+        na_sm_addr->pid = na_sm_op_id->info.recv_unexpected.pid;
+        na_sm_addr->self = NA_FALSE;
+
+        callback_info->info.recv_unexpected.source = (na_addr_t) na_sm_addr;
 	callback_info->info.recv_unexpected.actual_buf_size = 0;
 	callback_info->info.recv_unexpected.tag = 3;
 

@@ -197,7 +197,8 @@ na_test_gen_config(int argc, char *argv[])
     char *na_protocol_name = NULL;
     static char info_string[NA_TEST_MAX_ADDR_NAME];
     char na_hostname[NA_TEST_MAX_ADDR_NAME];
-    unsigned int na_port = 22222;
+    // unsigned int na_port = 22222;
+    unsigned int na_port = getpid();
     char *info_string_ptr = info_string;
     int opt;
 

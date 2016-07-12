@@ -21,13 +21,13 @@
 #include <limits.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/uio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
-#include <errno.h>
-#include <linux/limits.h>
 #include <sys/epoll.h>
+#include <linux/limits.h>
 
 /****************/
 /* Local Macros */
@@ -107,7 +107,6 @@ struct na_sm_info_get {
     na_bool_t   internal_progress;
 };
 
-/* TODO */
 struct na_sm_op_id {
     na_context_t *context;
     na_cb_type_t type;
@@ -126,12 +125,8 @@ struct na_sm_op_id {
     } info;
 };
 
-/* TODO check what is needed here */
 struct na_sm_private_data {
-  // char *listen_addr;                            /* Listen addr */
-
-  // hg_thread_mutex_t test_unexpected_mutex;      /* Mutex */
-    hg_queue_t *unexpected_msg_queue;             /* Unexpected message queue */
+    hg_queue_t *unexpected_msg_queue;           /* Unexpected message queue */
     hg_thread_mutex_t unexpected_msg_queue_mutex; /* Mutex */
     hg_queue_t *unexpected_op_queue;              /* Unexpected op queue */
     hg_thread_mutex_t unexpected_op_queue_mutex;  /* Mutex */
@@ -383,9 +378,10 @@ na_sm_get(
 
 /* progress */
 static na_return_t
-na_sm_progress_expected(
+na_sm_progress_pipe(
         na_class_t   *na_class,
-        na_sm_op_id_t *op_id
+        na_sm_op_id_t *op_id,
+        char* pname
         );
 
 static na_return_t
@@ -575,7 +571,6 @@ static na_return_t
 na_sm_context_destroy(na_class_t NA_UNUSED *na_class,
         na_plugin_context_t context)
 {
-
     na_return_t ret = NA_SUCCESS;
     return ret;
 }
@@ -833,21 +828,24 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
         na_cb_t callback, void *arg, void *buf, na_size_t buf_size,
         na_op_id_t *op_id)
 {
-    fprintf(stderr, ">na_sm_msg_recv_unexpected()\n");
-    struct stat sb;
+    fprintf(stderr, ">na_sm_msg_recv_unexpected(buf_size=%d)\n", buf_size);
+
     char myfifo[128];
     char fifobuf[BUFSIZ];
-    sprintf(myfifo, "/tmp/mumfifo%d", getpid()); 
+
     int fret = -1;
     int efd = -1;		/* epoll descriptor */
     int s = -1;
+    int descriptor = -1;    	/* shared memory descriptor */
+
     struct epoll_event event;
     struct epoll_event events[NA_SM_EPOLL_MAX_EVENTS];
-
-    int descriptor = -1;    	/* shared memory descriptor */
+    struct stat sb;
 
     na_sm_op_id_t *na_sm_op_id = NULL;
     na_return_t ret = NA_SUCCESS;
+
+    sprintf(myfifo, "/tmp/mumfifo%d", getpid()); 
     if (stat(myfifo, &sb) == -1) {
       fret = mkfifo(myfifo, 0666);
       if (fret == -1){
@@ -893,26 +891,13 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
                         descriptor, 0);
 
     /* Publish memory location via pipe. */
-
     if (result == MAP_FAILED) {
         NA_LOG_ERROR("mmap() failed.");        
         return NA_PROTOCOL_ERROR;
     }
+
 #if 0
-    /* Busy polling - it works but it is not recommended. */
-    int not_changed = 1;
-    while (not_changed){
-      /* Check buffer change. */
-      fprintf(stderr, "=na_sm_msg_recv_unexpected():result[0] = %c\n", result[0]);
-      if (result[0] != 0) {
-	fprintf(stderr, "=na_sm_msg_recv_unexpected:result[0] is now %c\n", result[0]);
-	not_changed = 0;
-      }
-    }
-#endif
     /* Use epoll to check if something is received. */
-
-
     efd = epoll_create1(0);
     if (efd == -1)
       {
@@ -966,7 +951,7 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
     close(pipe_descriptor);    
   } // while(not completed)
 // unlink(myfifo);
-
+#endif
     /* Push it into queue. */
     hg_thread_mutex_lock(&NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
 
@@ -978,9 +963,7 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
 
     hg_thread_mutex_unlock(
             &NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
-
     if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = na_sm_op_id;
-    // *op_id = (na_op_id_t) na_sm_op_id;
     return ret;
 }
 
@@ -1092,7 +1075,6 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
     struct na_sm_op_id *na_sm_op_id = NULL;        
     struct na_sm_addr *na_sm_addr = (struct na_sm_addr*) source;
     na_return_t ret = NA_SUCCESS;
-    int sm_ret = 0;
     int descriptor = -1;    
     // char *myfifo = "/tmp/mercury_expected_msg_fifo";
 
@@ -1148,10 +1130,6 @@ na_sm_msg_recv_expected(na_class_t NA_UNUSED *na_class, na_context_t *context,
         fprintf(stderr, "Error description is : %s\n", strerror(errno));     
       }
     }
-
-    
-    sm_ret = 1;
-
     hg_thread_mutex_lock(&NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
 
     if (hg_queue_push_head(NA_SM_PRIVATE_DATA(na_class)->unexpected_op_queue,
@@ -1558,17 +1536,15 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
 }
 
 static na_return_t
-na_sm_progress_expected(na_class_t *na_class, struct na_sm_op_id *na_sm_op_id)
+na_sm_progress_pipe(na_class_t *na_class, struct na_sm_op_id *na_sm_op_id, 
+                    char* pname)
 {
-
-    
     na_return_t ret = NA_SUCCESS;
-    // char *myfifo = "/tmp/mercury_expected_msg_fifo";
     char myfifo[128];
     char fifobuf[BUFSIZ];
-    sprintf(myfifo, "/tmp/memfifo%d", getpid()); 
+    sprintf(myfifo, "/tmp/%s%d", pname, getpid()); 
 
-    fprintf(stderr, ">na_sm_progress_expected()\n");
+    fprintf(stderr, ">na_sm_progress_pipe(pname=%s)\n", pname);
     int pipe_descriptor = open(myfifo, O_RDONLY|O_NONBLOCK);
     if (pipe_descriptor == -1) {
         fprintf(stderr, "open failed\n");
@@ -1585,12 +1561,9 @@ na_sm_progress_expected(na_class_t *na_class, struct na_sm_op_id *na_sm_op_id)
 	perror ("epoll_create");
 	abort ();
       }
-    /* epoll on shared memory doesn't work. */
-    // event.data.fd = descriptor;
     event.data.fd = pipe_descriptor;
     event.events = EPOLLIN | EPOLLET;
 
-    // s = epoll_ctl(efd, EPOLL_CTL_ADD, descriptor, &event);
     s = epoll_ctl(efd, EPOLL_CTL_ADD, pipe_descriptor, &event);
     if (s == -1)
       {
@@ -1614,8 +1587,10 @@ na_sm_progress_expected(na_class_t *na_class, struct na_sm_op_id *na_sm_op_id)
 		fprintf(stderr, "got events on pipe.\n");
                 read(pipe_descriptor, fifobuf, BUFSIZ);
                 fprintf(stderr, "read %s from pipe.\n", fifobuf);
-                na_sm_complete(na_sm_op_id);
+                if(0 == strcmp(pname, "mumfifo"))
+                  na_sm_op_id->info.recv_unexpected.pid = atoi(fifobuf);
 		close(pipe_descriptor);
+                na_sm_complete(na_sm_op_id);
 		return NA_SUCCESS;
 	      }
 	      else {
@@ -1674,11 +1649,12 @@ na_sm_progress(na_class_t *na_class, na_context_t *context,
                 NA_LOG_ERROR("Should not complete lookup here");
                 break;
             case NA_CB_RECV_UNEXPECTED:
-                ret = na_sm_complete(na_sm_op_id);
+              ret = na_sm_progress_pipe(na_class, na_sm_op_id, "mumfifo");
+              // ret = na_sm_complete(na_sm_op_id);
                 break;
             case NA_CB_RECV_EXPECTED: 	      // Use unexpected Q Temporarily
-	        ret = na_sm_progress_expected(na_class, na_sm_op_id);
-                break;
+              ret = na_sm_progress_pipe(na_class, na_sm_op_id, "memfifo");
+              break;
             default:
                 NA_LOG_ERROR("Unknown type of operation ID");
                 ret = NA_PROTOCOL_ERROR;
@@ -1756,8 +1732,7 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
 
         callback_info->info.recv_unexpected.source = (na_addr_t) na_sm_addr;
 	callback_info->info.recv_unexpected.actual_buf_size = 0;
-	callback_info->info.recv_unexpected.tag = 3;
-
+        // 	callback_info->info.recv_unexpected.tag = 3;
         NA_LOG_ERROR("Got NA_CB_RECV_UNEXPECTED.");
         break;        
     case NA_CB_SEND_UNEXPECTED:

@@ -45,7 +45,6 @@
 #define NA_SM_PRIVATE_DATA(na_class) \
     ((struct na_sm_private_data *)(na_class->private_data))
 
-#define LINUX 1
 /************************************/
 /* Local Type and Struct Definition */
 /************************************/
@@ -922,9 +921,9 @@ na_sm_msg_recv_unexpected(na_class_t *na_class, na_context_t *context,
     ret2 = epoll_wait(efd, events, NA_SM_EPOLL_MAX_EVENTS, -1);
     if (ret2 > 0) {
       int i;
-      int count = ret2; // , i, ret2;
+      int count = ret2;
 
-      fprintf(stderr, "%s: epoll_wait() found %d events.\n",
+      fprintf(stderr, "=%s: epoll_wait() found %d events.\n",
 	    __func__, count);
       for (i = 0; i < count; i++) {
 	if (events[i].events & EPOLLIN)
@@ -1431,17 +1430,16 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     na_sm_op_id->canceled = 0;
     
     pid_t pid = na_sm_mem_handle_remote->pid; 
-    // local[0].iov_base = na_sm_mem_handle_local->base; 
-    local[0].iov_base = buf;
+    local[0].iov_base = na_sm_mem_handle_local->base; 
+    // local[0].iov_base = buf;
     // local[0].iov_len = na_sm_mem_handle_local->size;
     local[0].iov_len = 100;
 
     remote[0].iov_base = na_sm_mem_handle_remote->base;
     remote[0].iov_len = 100;
     // remote[0].iov_len = na_sm_mem_handle_remote->size;
-    // #ifdef LINUX    
     nwrite = process_vm_writev(pid, local, 1, remote, 1, 0);
-    // #endif    
+
     if (nwrite < 1){
         perror("process_vm_writev()");
     }
@@ -1461,8 +1459,9 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     ret = na_sm_complete(na_sm_op_id);
     
     /* Assign op_id */
-    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = na_sm_op_id;
-    // *op_id = (na_op_id_t) na_sm_op_id;
+    if (op_id && op_id != NA_OP_ID_IGNORE) 
+      *op_id = na_sm_op_id;
+
     return ret;
 }
 
@@ -1481,6 +1480,8 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     struct na_sm_op_id *na_sm_op_id = NULL;
     na_sm_mem_handle_t *na_sm_mem_handle_local = local_mem_handle;
     na_sm_mem_handle_t *na_sm_mem_handle_remote = remote_mem_handle;
+
+    fprintf(stderr, ">na_sm_get(length=%zd)\n", length);
     /* Allocate op_id */
     na_sm_op_id = (struct na_sm_op_id *) malloc(sizeof(struct na_sm_op_id));
     if (!na_sm_op_id) {
@@ -1497,8 +1498,8 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     
     pid_t pid = na_sm_mem_handle_remote->pid; 
     // pid_t pid = getpid(); 
-    // local[0].iov_base = na_sm_mem_handle_local->base; 
-    local[0].iov_base = buf;
+    local[0].iov_base = na_sm_mem_handle_local->base; 
+    // local[0].iov_base = buf;
     // local[0].iov_len = na_sm_mem_handle_local->size;
     local[0].iov_len = 100;
     
@@ -1506,14 +1507,14 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     remote[0].iov_base = na_sm_mem_handle_remote->base;
     remote[0].iov_len = 100;
     // remote[0].iov_len = na_sm_mem_handle_remote->size;
-    // #ifdef LINUX
+
     nread = process_vm_readv(pid, local, 1, remote, 1, 0);
-    // #endif    
+
     if (nread == 0){
         perror("process_vm_readv()");
     }
     else {
-      fprintf(stderr, "pid=%d, local->size=%d, remote->base=0x%llx, remote->size=%d, nread=%d\n",
+      fprintf(stderr, "=na_sm_get():pid=%d, local->size=%d, remote->base=0x%llx, remote->size=%d, nread=%d\n",
 	      pid,
 	      na_sm_mem_handle_local->size,            
 	      na_sm_mem_handle_remote->base,
@@ -1529,9 +1530,12 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         NA_LOG_ERROR("Could not complete operation");
         free(na_sm_op_id);
     }
+
     /* Assign op_id */
-    if (op_id && op_id != NA_OP_ID_IGNORE) *op_id = na_sm_op_id;
-    // *op_id = (na_op_id_t) na_sm_op_id;
+    if (op_id && op_id != NA_OP_ID_IGNORE) {
+      *op_id = na_sm_op_id;
+    }
+
     return ret;
 }
 
@@ -1646,12 +1650,11 @@ na_sm_progress(na_class_t *na_class, na_context_t *context,
         if (na_sm_op_id) {
             switch (na_sm_op_id->type) {
             case NA_CB_LOOKUP:
-                NA_LOG_ERROR("Should not complete lookup here");
-                break;
+              NA_LOG_ERROR("SM plugin should not complete lookup here.");
+              break;
             case NA_CB_RECV_UNEXPECTED:
               ret = na_sm_progress_pipe(na_class, na_sm_op_id, "mumfifo");
-              // ret = na_sm_complete(na_sm_op_id);
-                break;
+              break;
             case NA_CB_RECV_EXPECTED: 	      // Use unexpected Q Temporarily
               ret = na_sm_progress_pipe(na_class, na_sm_op_id, "memfifo");
               break;
@@ -1716,7 +1719,7 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
         NA_LOG_ERROR("Got NA_CB_SEND_EXPECTED.");
         break;
     case NA_CB_RECV_UNEXPECTED:
-        /* Allocate addr */
+        /* Allocate addr. */
         na_sm_addr = (struct na_sm_addr *) malloc(
                                                   sizeof(struct na_sm_addr));
         if (!na_sm_addr) {
@@ -1725,7 +1728,6 @@ na_sm_complete(struct na_sm_op_id *na_sm_op_id)
           free(callback_info);
           return ret;
         }
-        
         na_sm_addr->unexpected = NA_TRUE;
         na_sm_addr->pid = na_sm_op_id->info.recv_unexpected.pid;
         na_sm_addr->self = NA_FALSE;

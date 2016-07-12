@@ -258,6 +258,7 @@ main(int argc, char *argv[])
     params.na_class = NA_Test_server_init(argc, argv, NA_TRUE, NULL, NULL,
         &number_of_peers);
 
+    fprintf(stderr, "number_of_peers = %d\n", number_of_peers);
     params.context = NA_Context_create(params.na_class);
 
     /* Allocate send/recv/bulk bufs */

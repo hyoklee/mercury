@@ -1,0 +1,38 @@
+name: conda
+
+on:
+  workflow_dispatch:
+  push:
+     branches:
+       - master
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          python-version: 3.12.9
+          channels: conda-forge,iowarp
+      - name: build-conda
+        run: |
+          export CMAKE_PREFIX_PATH=$CONDA_PREFIX
+          conda install -y conda-build
+          conda install -y conda-verify
+          conda install -y anaconda-client
+          conda-build .
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: mercury-0.0.0.conda
+          path: /usr/share/miniconda/envs/test/conda-bld/linux-64/mercury-0.0.0-0.conda
+      - name: release
+        run: |
+          anaconda -t  "${{ secrets.ANACONDA_TOKEN }}" upload /usr/share/miniconda/envs/test/conda-bld/linux-64/mercury-0.0.0-0.conda

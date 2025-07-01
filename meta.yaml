@@ -1,0 +1,27 @@
+package:
+  name: mercury
+  version: 0.0.0
+
+source:
+  path: .
+#  git_url: https://github.com/hyoklee/mercury
+#  git_depth: 1
+
+requirements:
+  build:
+    - boost
+    - cmake
+  run:
+    - python
+
+test:
+  requires:
+    - boost
+    - cmake
+  commands:
+    - pip --help
+
+about:
+  home: https://grc.iit.edu/research/projects/iowarp/
+  license: BSD
+  summary: IOWarp mercury Conda Package

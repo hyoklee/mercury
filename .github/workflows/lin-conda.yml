@@ -31,8 +31,8 @@ jobs:
       - name: upload
         uses: actions/upload-artifact@v4
         with:
-          name: mercury-0.0.0.conda
-          path: /usr/share/miniconda/envs/test/conda-bld/linux-64/mercury-0.0.0-0.conda
+          name: mercury-0.0.0-py312_0.conda
+          path: /usr/share/miniconda/envs/test/conda-bld/linux-64/mercury-0.0.0-py312_0.conda
       - name: release
         run: |
-          anaconda -t  "${{ secrets.ANACONDA_TOKEN }}" upload /usr/share/miniconda/envs/test/conda-bld/linux-64/mercury-0.0.0-0.conda
+          anaconda -t  "${{ secrets.ANACONDA_TOKEN }}" upload /usr/share/miniconda/envs/test/conda-bld/linux-64/mercury-0.0.0-py312_0.conda
